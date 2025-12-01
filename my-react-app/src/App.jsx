@@ -92,19 +92,29 @@ const Recorder = ({ onTranscriptComplete }) => {
       
       // Handle specific errors
       if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-        setError('Microphone permission denied. Please allow microphone access and try again.');
+        setError('Microphone permission denied. Please go to Chrome Settings > Site Settings > Microphone and allow access for this site, then reload the page.');
         setIsRecording(false);
         isStoppedManually.current = true;
       } else if (event.error === 'no-speech') {
-        // Don't show error, just restart
-        console.log('No speech detected, continuing...');
+        // Don't show error on Android, just continue
+        console.log('No speech detected, will restart...');
       } else if (event.error === 'aborted') {
         // Ignore aborted errors unless manually stopped
         if (!isStoppedManually.current) {
-          console.log('Recognition aborted, restarting...');
+          console.log('Recognition aborted, will restart...');
         }
+      } else if (event.error === 'audio-capture') {
+        setError('Microphone error. Please check that your microphone is working and not being used by another app.');
+        setIsRecording(false);
+        isStoppedManually.current = true;
       } else if (event.error === 'network') {
-        setError('Network error. Please check your connection.');
+        setError('Network error. Speech recognition requires an internet connection.');
+        setIsRecording(false);
+        isStoppedManually.current = true;
+      } else if (event.error === 'service-not-allowed') {
+        setError('Speech recognition service is not available. Please reload the page and try again.');
+        setIsRecording(false);
+        isStoppedManually.current = true;
       } else {
         console.log('Recognition error:', event.error);
       }
@@ -141,17 +151,7 @@ const Recorder = ({ onTranscriptComplete }) => {
       setInterimTranscript('');
       isStoppedManually.current = false;
 
-      // Request microphone permission
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(track => track.stop()); // Just checking permission
-      } catch (permissionError) {
-        console.error('Microphone permission error:', permissionError);
-        setError('Please allow microphone access in your browser settings.');
-        return;
-      }
-
-      // Initialize and start recognition
+      // Initialize recognition FIRST (before permission check)
       const recognition = initRecognition();
       if (!recognition) {
         setError('Could not initialize speech recognition.');
@@ -160,12 +160,20 @@ const Recorder = ({ onTranscriptComplete }) => {
 
       recognitionRef.current = recognition;
       
+      // Add a small delay for Android Chrome stability
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       try {
         recognition.start();
         setIsRecording(true);
       } catch (err) {
         console.error('Error starting recognition:', err);
-        setError('Failed to start recording. Please try again.');
+        // If it's an "already started" error, ignore it
+        if (err.message && err.message.includes('already started')) {
+          setIsRecording(true);
+        } else {
+          setError('Failed to start recording. Please reload the page and try again.');
+        }
       }
 
     } catch (err) {
