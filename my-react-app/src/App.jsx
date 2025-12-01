@@ -36,116 +36,168 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [error, setError] = useState('');
   const [browserSupport, setBrowserSupport] = useState(true);
+  const [debugLogs, setDebugLogs] = useState([]);
+  const [micPermissionGranted, setMicPermissionGranted] = useState(false);
 
   const recognitionRef = useRef(null);
-  const restartTimeoutRef = useRef(null);
   const isStoppedManually = useRef(false);
+  const hasStartedSuccessfully = useRef(false);
+
+  // Add debug log
+  const addDebugLog = (message) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 10));
+    console.log(message);
+  };
 
   // Check browser support
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setBrowserSupport(false);
-      setError('Speech recognition is not supported on this browser. Please use Chrome, Safari, or Edge.');
+      setError('Speech recognition is not supported on this browser. Please use Chrome.');
+      addDebugLog('❌ Browser does not support speech recognition');
+    } else {
+      addDebugLog('✅ Browser supports speech recognition');
     }
   }, []);
+
+  // Test microphone access
+  const testMicrophone = async () => {
+    addDebugLog('🔍 Testing microphone access...');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      addDebugLog('✅ Microphone access granted!');
+      setMicPermissionGranted(true);
+      
+      // Stop the stream
+      stream.getTracks().forEach(track => {
+        track.stop();
+        addDebugLog('🎤 Microphone track stopped');
+      });
+      
+      return true;
+    } catch (err) {
+      addDebugLog(`❌ Microphone error: ${err.message}`);
+      setError(`Microphone access failed: ${err.message}`);
+      return false;
+    }
+  };
 
   // Initialize recognition
   const initRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return null;
+    if (!SpeechRecognition) {
+      addDebugLog('❌ SpeechRecognition not available');
+      return null;
+    }
 
     const recognition = new SpeechRecognition();
     
     // Android Chrome optimized settings
-    recognition.continuous = true; // Changed to true for better Android support
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.lang = 'en-US';
 
+    addDebugLog('⚙️ Recognition configured: continuous=true, lang=en-US');
+
     recognition.onstart = () => {
-      console.log('✅ Speech recognition started successfully');
+      addDebugLog('✅ Recognition STARTED - Microphone is now listening');
+      hasStartedSuccessfully.current = true;
       setError('');
       setIsRecording(true);
     };
 
+    recognition.onaudiostart = () => {
+      addDebugLog('🎤 Audio capture started - Sound is being captured');
+    };
+
+    recognition.onsoundstart = () => {
+      addDebugLog('🔊 Sound detected by microphone');
+    };
+
+    recognition.onspeechstart = () => {
+      addDebugLog('🗣️ Speech detected - Processing your words...');
+    };
+
     recognition.onresult = (event) => {
-      console.log('🎤 Received speech result:', event.results.length, 'results');
+      addDebugLog(`📝 Got ${event.results.length} result(s)`);
       let interim = '';
       let final = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        console.log(`Result ${i}: "${transcript}" (final: ${event.results[i].isFinal})`);
+        const text = event.results[i][0].transcript;
+        const confidence = event.results[i][0].confidence;
         
         if (event.results[i].isFinal) {
-          final += transcript + ' ';
+          final += text + ' ';
+          addDebugLog(`✅ FINAL: "${text}" (confidence: ${confidence?.toFixed(2) || 'N/A'})`);
         } else {
-          interim += transcript;
+          interim += text;
+          addDebugLog(`⏳ INTERIM: "${text}"`);
         }
       }
 
       if (final) {
-        console.log('✅ Final transcript:', final);
         setTranscript(prev => prev + final);
-      }
-      if (interim) {
-        console.log('⏳ Interim transcript:', interim);
       }
       setInterimTranscript(interim);
     };
 
+    recognition.onspeechend = () => {
+      addDebugLog('🔇 Speech ended - No more speech detected');
+    };
+
+    recognition.onsoundend = () => {
+      addDebugLog('🔇 Sound ended - No more sound detected');
+    };
+
+    recognition.onaudioend = () => {
+      addDebugLog('🔇 Audio capture ended');
+    };
+
     recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
+      addDebugLog(`❌ ERROR: ${event.error} - ${event.message || 'No message'}`);
       
-      // Handle specific errors
       if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-        setError('Microphone permission denied. Please go to Chrome Settings > Site Settings > Microphone and allow access for this site, then reload the page.');
+        setError('Microphone permission denied. Please allow microphone access in Chrome settings.');
         setIsRecording(false);
         isStoppedManually.current = true;
       } else if (event.error === 'no-speech') {
-        // Don't show error on Android, just continue
-        console.log('No speech detected, will restart...');
-      } else if (event.error === 'aborted') {
-        // Ignore aborted errors unless manually stopped
-        if (!isStoppedManually.current) {
-          console.log('Recognition aborted, will restart...');
-        }
+        addDebugLog('⚠️ No speech detected - Make sure you are speaking clearly');
       } else if (event.error === 'audio-capture') {
-        setError('Microphone error. Please check that your microphone is working and not being used by another app.');
+        setError('Cannot access microphone. Please check if another app is using it.');
         setIsRecording(false);
         isStoppedManually.current = true;
       } else if (event.error === 'network') {
-        setError('Network error. Speech recognition requires an internet connection.');
+        setError('Network error. Speech recognition needs internet connection.');
         setIsRecording(false);
         isStoppedManually.current = true;
-      } else if (event.error === 'service-not-allowed') {
-        setError('Speech recognition service is not available. Please reload the page and try again.');
-        setIsRecording(false);
-        isStoppedManually.current = true;
-      } else {
-        console.log('Recognition error:', event.error);
+      } else if (event.error === 'aborted') {
+        if (!isStoppedManually.current) {
+          addDebugLog('⚠️ Recognition aborted unexpectedly');
+        }
       }
     };
 
     recognition.onend = () => {
-      console.log('Speech recognition ended');
+      addDebugLog('🛑 Recognition ended');
       setInterimTranscript('');
       
-      // Auto-restart if still recording and not stopped manually
-      if (!isStoppedManually.current) {
-        console.log('Auto-restarting recognition...');
-        restartTimeoutRef.current = setTimeout(() => {
+      // Auto-restart if still recording
+      if (!isStoppedManually.current && hasStartedSuccessfully.current) {
+        addDebugLog('🔄 Attempting to restart...');
+        setTimeout(() => {
           try {
             if (recognitionRef.current) {
               recognitionRef.current.start();
-              console.log('Recognition restarted');
             }
           } catch (err) {
-            console.log('Could not restart recognition:', err);
+            addDebugLog(`❌ Restart failed: ${err.message}`);
             setIsRecording(false);
           }
-        }, 100); // Reduced delay
+        }, 100);
       } else {
         setIsRecording(false);
       }
@@ -158,57 +210,54 @@ const Recorder = ({ onTranscriptComplete }) => {
   const startRecording = async () => {
     if (!browserSupport) return;
 
+    addDebugLog('🎬 Starting recording process...');
+    setError('');
+    setTranscript('');
+    setInterimTranscript('');
+    isStoppedManually.current = false;
+    hasStartedSuccessfully.current = false;
+
+    // First test microphone
+    const micOk = await testMicrophone();
+    if (!micOk) {
+      addDebugLog('❌ Cannot proceed - microphone test failed');
+      return;
+    }
+
+    // Wait a bit for Android
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Initialize recognition
+    const recognition = initRecognition();
+    if (!recognition) {
+      setError('Could not initialize speech recognition.');
+      addDebugLog('❌ Recognition initialization failed');
+      return;
+    }
+
+    recognitionRef.current = recognition;
+    
     try {
-      setError('');
-      setTranscript('');
-      setInterimTranscript('');
-      isStoppedManually.current = false;
-
-      // Initialize recognition FIRST (before permission check)
-      const recognition = initRecognition();
-      if (!recognition) {
-        setError('Could not initialize speech recognition.');
-        return;
-      }
-
-      recognitionRef.current = recognition;
-      
-      // Add a small delay for Android Chrome stability
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      try {
-        recognition.start();
-        setIsRecording(true);
-      } catch (err) {
-        console.error('Error starting recognition:', err);
-        // If it's an "already started" error, ignore it
-        if (err.message && err.message.includes('already started')) {
-          setIsRecording(true);
-        } else {
-          setError('Failed to start recording. Please reload the page and try again.');
-        }
-      }
-
+      addDebugLog('🎤 Calling recognition.start()...');
+      recognition.start();
     } catch (err) {
-      console.error('Error in startRecording:', err);
-      setError('An unexpected error occurred. Please try again.');
+      addDebugLog(`❌ Start failed: ${err.message}`);
+      setError('Failed to start recording. Please try again.');
     }
   };
 
   // Stop recording
   const stopRecording = () => {
+    addDebugLog('⏹️ Stopping recording...');
     isStoppedManually.current = true;
-    
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
+    hasStartedSuccessfully.current = false;
 
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
+        addDebugLog('✅ Recognition stopped');
       } catch (err) {
-        console.log('Error stopping recognition:', err);
+        addDebugLog(`⚠️ Stop error: ${err.message}`);
       }
       recognitionRef.current = null;
     }
@@ -223,6 +272,7 @@ const Recorder = ({ onTranscriptComplete }) => {
       onTranscriptComplete(transcript.trim());
       setTranscript('');
       setInterimTranscript('');
+      addDebugLog('💾 Note saved');
     }
   };
 
@@ -230,14 +280,12 @@ const Recorder = ({ onTranscriptComplete }) => {
   const discardTranscript = () => {
     setTranscript('');
     setInterimTranscript('');
+    addDebugLog('🗑️ Transcript discarded');
   };
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current);
-      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -258,7 +306,7 @@ const Recorder = ({ onTranscriptComplete }) => {
         <div style={styles.error}>
           ⚠️ Speech recognition is not supported on this browser. 
           <br />
-          Please use <strong>Chrome</strong> (Android) or <strong>Safari</strong> (iPhone).
+          Please use <strong>Chrome</strong> on Android.
         </div>
       )}
 
@@ -268,15 +316,30 @@ const Recorder = ({ onTranscriptComplete }) => {
         </div>
       )}
 
+      {micPermissionGranted && (
+        <div style={styles.success}>
+          ✅ Microphone permission granted
+        </div>
+      )}
+
       <div style={styles.controls}>
         {!isRecording ? (
-          <button
-            onClick={startRecording}
-            style={{...styles.button, ...styles.startButton}}
-            disabled={!browserSupport}
-          >
-            ▶ Start Recording
-          </button>
+          <>
+            <button
+              onClick={startRecording}
+              style={{...styles.button, ...styles.startButton}}
+              disabled={!browserSupport}
+            >
+              ▶ Start Recording
+            </button>
+            <button
+              onClick={testMicrophone}
+              style={{...styles.button, ...styles.testButton}}
+              disabled={!browserSupport}
+            >
+              🔍 Test Mic
+            </button>
+          </>
         ) : (
           <button
             onClick={stopRecording}
@@ -290,15 +353,9 @@ const Recorder = ({ onTranscriptComplete }) => {
       {isRecording && (
         <div style={styles.recordingIndicator}>
           <span style={styles.recordingDot}>●</span> 
-          <span>Listening... Speak clearly into your phone</span>
+          <span>Recording... Speak clearly and loudly</span>
         </div>
       )}
-
-      <div style={styles.debugInfo}>
-        <p style={{fontSize: '0.85rem', color: '#666', margin: '0.5rem 0'}}>
-          🔍 Debug: Check browser console (F12) to see if speech is being detected
-        </p>
-      </div>
 
       {displayText && (
         <div style={styles.transcriptSection}>
@@ -328,24 +385,29 @@ const Recorder = ({ onTranscriptComplete }) => {
         </div>
       )}
 
-      <div style={styles.info}>
-        <p><strong>How to use:</strong></p>
-        <ol style={styles.infoList}>
-          <li>Click "Start Recording" and allow microphone access</li>
-          <li>Start speaking clearly</li>
-          <li>Your words will appear as you speak</li>
-          <li>Click "Stop Recording" when finished</li>
-          <li>Save or discard your note</li>
-        </ol>
-        <div style={styles.tips}>
-          <p><strong>Tips for best results:</strong></p>
-          <ul style={styles.infoList}>
-            <li>Use Chrome on Android or Safari on iPhone</li>
-            <li>Speak clearly and at a normal pace</li>
-            <li>Reduce background noise</li>
-            <li>Keep sentences short for better accuracy</li>
-          </ul>
+      <div style={styles.debugSection}>
+        <h3 style={styles.sectionTitle}>🔍 Debug Log (Last 10 events):</h3>
+        <div style={styles.debugBox}>
+          {debugLogs.length === 0 ? (
+            <div style={{color: '#999'}}>No events yet. Click "Start Recording" to begin.</div>
+          ) : (
+            debugLogs.map((log, idx) => (
+              <div key={idx} style={styles.debugLine}>{log}</div>
+            ))
+          )}
         </div>
+      </div>
+
+      <div style={styles.info}>
+        <p><strong>Troubleshooting Tips:</strong></p>
+        <ol style={styles.infoList}>
+          <li><strong>Click "Test Mic" first</strong> to verify microphone works</li>
+          <li>Look for "🔊 Sound detected" in the debug log when you speak</li>
+          <li>If no sound is detected, try speaking LOUDER</li>
+          <li>Make sure Chrome has microphone permission in Android settings</li>
+          <li>Close other apps that might be using the microphone</li>
+          <li>Try restarting Chrome if nothing works</li>
+        </ol>
       </div>
     </div>
   );
@@ -444,7 +506,7 @@ const App = () => {
       </div>
 
       <footer style={styles.footer}>
-        <p>Works on Chrome (Android) • Safari (iPhone) • Edge</p>
+        <p>Optimized for Chrome on Android</p>
         <p style={{fontSize: '0.85rem', marginTop: '0.5rem', opacity: 0.8}}>
           Notes stored in memory • Will clear when page closes
         </p>
@@ -507,10 +569,20 @@ const styles = {
     border: '1px solid #ef9a9a',
     lineHeight: '1.5',
   },
+  success: {
+    backgroundColor: '#e8f5e9',
+    color: '#2e7d32',
+    padding: '1rem',
+    borderRadius: '4px',
+    marginBottom: '1rem',
+    border: '1px solid #81c784',
+    lineHeight: '1.5',
+  },
   controls: {
     display: 'flex',
     gap: '1rem',
     marginBottom: '1rem',
+    flexWrap: 'wrap',
   },
   button: {
     padding: '0.75rem 1.5rem',
@@ -528,6 +600,10 @@ const styles = {
   },
   stopButton: {
     backgroundColor: '#f44336',
+    color: 'white',
+  },
+  testButton: {
+    backgroundColor: '#2196F3',
     color: 'white',
   },
   saveButton: {
@@ -550,12 +626,6 @@ const styles = {
     fontSize: '1.2rem',
     padding: '0.25rem 0.5rem',
     minWidth: 'auto',
-  },
-  debugInfo: {
-    padding: '0.5rem',
-    backgroundColor: '#f0f0f0',
-    borderRadius: '4px',
-    marginTop: '1rem',
   },
   recordingIndicator: {
     display: 'flex',
@@ -603,6 +673,27 @@ const styles = {
     display: 'flex',
     gap: '1rem',
   },
+  debugSection: {
+    marginTop: '1.5rem',
+    padding: '1rem',
+    backgroundColor: '#f0f0f0',
+    borderRadius: '4px',
+    border: '1px solid #ddd',
+  },
+  debugBox: {
+    backgroundColor: '#1e1e1e',
+    color: '#00ff00',
+    padding: '1rem',
+    borderRadius: '4px',
+    fontFamily: 'monospace',
+    fontSize: '0.85rem',
+    maxHeight: '300px',
+    overflowY: 'auto',
+    lineHeight: '1.5',
+  },
+  debugLine: {
+    marginBottom: '0.25rem',
+  },
   info: {
     marginTop: '1.5rem',
     padding: '1rem',
@@ -610,11 +701,6 @@ const styles = {
     borderRadius: '4px',
     fontSize: '0.95rem',
     color: '#1565c0',
-  },
-  tips: {
-    marginTop: '1rem',
-    paddingTop: '1rem',
-    borderTop: '1px solid #bbdefb',
   },
   infoList: {
     margin: '0.5rem 0 0 0',
