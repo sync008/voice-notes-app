@@ -57,23 +57,27 @@ const Recorder = ({ onTranscriptComplete }) => {
 
     const recognition = new SpeechRecognition();
     
-    // Mobile-optimized settings
-    recognition.continuous = false; // Better for mobile - restart manually
+    // Android Chrome optimized settings
+    recognition.continuous = true; // Changed to true for better Android support
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.lang = 'en-US';
 
     recognition.onstart = () => {
-      console.log('Speech recognition started');
+      console.log('✅ Speech recognition started successfully');
       setError('');
+      setIsRecording(true);
     };
 
     recognition.onresult = (event) => {
+      console.log('🎤 Received speech result:', event.results.length, 'results');
       let interim = '';
       let final = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
+        console.log(`Result ${i}: "${transcript}" (final: ${event.results[i].isFinal})`);
+        
         if (event.results[i].isFinal) {
           final += transcript + ' ';
         } else {
@@ -82,7 +86,11 @@ const Recorder = ({ onTranscriptComplete }) => {
       }
 
       if (final) {
+        console.log('✅ Final transcript:', final);
         setTranscript(prev => prev + final);
+      }
+      if (interim) {
+        console.log('⏳ Interim transcript:', interim);
       }
       setInterimTranscript(interim);
     };
@@ -125,16 +133,21 @@ const Recorder = ({ onTranscriptComplete }) => {
       setInterimTranscript('');
       
       // Auto-restart if still recording and not stopped manually
-      if (isRecording && !isStoppedManually.current) {
+      if (!isStoppedManually.current) {
+        console.log('Auto-restarting recognition...');
         restartTimeoutRef.current = setTimeout(() => {
           try {
-            if (recognitionRef.current && isRecording) {
+            if (recognitionRef.current) {
               recognitionRef.current.start();
+              console.log('Recognition restarted');
             }
           } catch (err) {
             console.log('Could not restart recognition:', err);
+            setIsRecording(false);
           }
-        }, 300); // Small delay before restart
+        }, 100); // Reduced delay
+      } else {
+        setIsRecording(false);
       }
     };
 
@@ -277,9 +290,15 @@ const Recorder = ({ onTranscriptComplete }) => {
       {isRecording && (
         <div style={styles.recordingIndicator}>
           <span style={styles.recordingDot}>●</span> 
-          <span>Listening... Speak now</span>
+          <span>Listening... Speak clearly into your phone</span>
         </div>
       )}
+
+      <div style={styles.debugInfo}>
+        <p style={{fontSize: '0.85rem', color: '#666', margin: '0.5rem 0'}}>
+          🔍 Debug: Check browser console (F12) to see if speech is being detected
+        </p>
+      </div>
 
       {displayText && (
         <div style={styles.transcriptSection}>
@@ -531,6 +550,12 @@ const styles = {
     fontSize: '1.2rem',
     padding: '0.25rem 0.5rem',
     minWidth: 'auto',
+  },
+  debugInfo: {
+    padding: '0.5rem',
+    backgroundColor: '#f0f0f0',
+    borderRadius: '4px',
+    marginTop: '1rem',
   },
   recordingIndicator: {
     display: 'flex',
