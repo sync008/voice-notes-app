@@ -1,14 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 
 // ============================================================
 // CUSTOM HOOK: useLocalNotes
-// Manages notes in memory (localStorage not available in artifacts)
+// Manages notes in memory
 // ============================================================
 const useLocalNotes = () => {
-  // Initialize notes in memory
   const [notes, setNotes] = useState([]);
 
-  // Add a new note
   const addNote = (text) => {
     const newNote = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
@@ -19,12 +17,10 @@ const useLocalNotes = () => {
     return newNote;
   };
 
-  // Delete a note by ID
   const deleteNote = (id) => {
     setNotes(prev => prev.filter(note => note.id !== id));
   };
 
-  // Clear all notes
   const clearAllNotes = () => {
     setNotes([]);
   };
@@ -34,104 +30,28 @@ const useLocalNotes = () => {
 
 // ============================================================
 // COMPONENT: Recorder
-// Handles voice recording and speech-to-text conversion
+// Handles voice recording with server-side transcription
 // ============================================================
 const Recorder = ({ onTranscriptComplete }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState('');
-  const [isListening, setIsListening] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
 
   const mediaRecorderRef = useRef(null);
-  const recognitionRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const timerRef = useRef(null);
 
-  // Initialize Speech Recognition
-  useEffect(() => {
-    // Check if browser supports Speech Recognition
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
-    if (!SpeechRecognition) {
-      setError('Speech Recognition is not supported in this browser. Please use Chrome or another Chromium-based browser.');
-      return;
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {
-          // Ignore errors on cleanup
-        }
-      }
-    };
-  }, []);
-
-  // Create recognition instance on demand
-  const createRecognition = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return null;
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-
-    recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcriptPiece = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcriptPiece + ' ';
-        } else {
-          interimTranscript += transcriptPiece;
-        }
-      }
-
-      setTranscript(prev => {
-        const base = prev + finalTranscript;
-        return base + (interimTranscript ? `[${interimTranscript}]` : '');
-      });
-    };
-
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-        setError('Microphone permission denied. Please allow microphone access and try again.');
-      } else if (event.error === 'no-speech') {
-        // Don't show error for no-speech, just continue
-      } else {
-        setError(`Recognition error: ${event.error}`);
-      }
-      setIsListening(false);
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-      // Auto-restart if still recording (for Android compatibility)
-      if (isRecording && recognitionRef.current) {
-        try {
-          recognitionRef.current.start();
-          setIsListening(true);
-        } catch (e) {
-          console.log('Could not restart recognition:', e);
-        }
-      }
-    };
-
-    return recognition;
-  };
-
-  // Start recording audio and speech recognition
+  // Start recording
   const startRecording = async () => {
     try {
       setError('');
       setTranscript('');
+      setRecordingDuration(0);
       audioChunksRef.current = [];
 
-      // Request microphone access - this will prompt for permission if needed
+      // Request microphone access
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ 
@@ -154,41 +74,44 @@ const Recorder = ({ onTranscriptComplete }) => {
       }
 
       // Setup MediaRecorder
-      const mediaRecorder = new MediaRecorder(stream);
+      const options = { mimeType: 'audio/webm' };
+      
+      // Fallback for Safari/iOS
+      if (!MediaRecorder.isTypeSupported('audio/webm')) {
+        options.mimeType = 'audio/mp4';
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
 
-      // Collect audio data chunks
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
-      // Handle recording stop
-      mediaRecorder.onstop = () => {
-        // Stop all tracks to release microphone
+      mediaRecorder.onstop = async () => {
         stream.getTracks().forEach(track => track.stop());
         
-        // Clean up interim results markers
-        setTranscript(prev => prev.replace(/\[.*?\]/g, '').trim());
+        // Stop timer
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+
+        // Process the audio
+        if (audioChunksRef.current.length > 0) {
+          await transcribeAudio();
+        }
       };
 
-      // Start recording
       mediaRecorder.start();
       setIsRecording(true);
 
-      // Create and start speech recognition
-      const recognition = createRecognition();
-      if (recognition) {
-        recognitionRef.current = recognition;
-        try {
-          recognition.start();
-          setIsListening(true);
-        } catch (speechError) {
-          console.error('Speech recognition start error:', speechError);
-          // Continue with recording even if speech recognition fails
-        }
-      }
+      // Start timer
+      timerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
 
     } catch (err) {
       console.error('Error starting recording:', err);
@@ -196,31 +119,95 @@ const Recorder = ({ onTranscriptComplete }) => {
     }
   };
 
-  // Stop recording and speech recognition
+  // Stop recording
   const stopRecording = () => {
-    // Stop MediaRecorder
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
+  };
 
-    // Stop Speech Recognition
-    if (recognitionRef.current && isListening) {
-      try {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
-      } catch (e) {
-        console.log('Error stopping recognition:', e);
+  // Transcribe audio using Claude API
+  const transcribeAudio = async () => {
+    setIsProcessing(true);
+    setError('');
+
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { 
+        type: audioChunksRef.current[0].type 
+      });
+
+      // Convert blob to base64
+      const base64Audio = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64 = reader.result.split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+      });
+
+      // Send to Claude API for transcription
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Please transcribe this audio recording. Only provide the transcription text, nothing else. If you cannot understand the audio, say "Unable to transcribe audio".'
+                },
+                {
+                  type: 'document',
+                  source: {
+                    type: 'base64',
+                    media_type: audioBlob.type,
+                    data: base64Audio
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Transcription failed');
       }
-      setIsListening(false);
+
+      const data = await response.json();
+      const transcriptionText = data.content
+        .filter(item => item.type === 'text')
+        .map(item => item.text)
+        .join(' ')
+        .trim();
+
+      if (transcriptionText && !transcriptionText.includes('Unable to transcribe')) {
+        setTranscript(transcriptionText);
+      } else {
+        setError('Could not transcribe the audio. Please try speaking more clearly.');
+      }
+
+    } catch (err) {
+      console.error('Transcription error:', err);
+      setError('Failed to transcribe audio. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   // Save transcript as a note
   const saveNote = () => {
-    const cleanTranscript = transcript.replace(/\[.*?\]/g, '').trim();
-    if (cleanTranscript) {
-      onTranscriptComplete(cleanTranscript);
+    if (transcript) {
+      onTranscriptComplete(transcript);
       setTranscript('');
     }
   };
@@ -228,6 +215,13 @@ const Recorder = ({ onTranscriptComplete }) => {
   // Discard current transcript
   const discardTranscript = () => {
     setTranscript('');
+  };
+
+  // Format duration
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -241,27 +235,34 @@ const Recorder = ({ onTranscriptComplete }) => {
       )}
 
       <div style={styles.controls}>
-        {!isRecording ? (
+        {!isRecording && !isProcessing ? (
           <button
             onClick={startRecording}
             style={{...styles.button, ...styles.startButton}}
-            disabled={!!error && !error.includes('permission')}
           >
             ▶ Start Recording
           </button>
-        ) : (
+        ) : isRecording ? (
           <button
             onClick={stopRecording}
             style={{...styles.button, ...styles.stopButton}}
           >
             ⏹ Stop Recording
           </button>
-        )}
+        ) : null}
       </div>
 
       {isRecording && (
         <div style={styles.recordingIndicator}>
-          <span style={styles.recordingDot}>●</span> Recording in progress...
+          <span style={styles.recordingDot}>●</span> 
+          Recording... {formatDuration(recordingDuration)}
+        </div>
+      )}
+
+      {isProcessing && (
+        <div style={styles.processingIndicator}>
+          <div style={styles.spinner}></div>
+          <span>Processing audio...</span>
         </div>
       )}
 
@@ -291,13 +292,14 @@ const Recorder = ({ onTranscriptComplete }) => {
       <div style={styles.info}>
         <p><strong>How to use:</strong></p>
         <ol style={styles.infoList}>
-          <li>Click "Start Recording" and allow microphone access when prompted</li>
+          <li>Click "Start Recording" and allow microphone access</li>
           <li>Speak clearly into your microphone</li>
           <li>Click "Stop Recording" when finished</li>
-          <li>Review the transcript and save it as a note</li>
+          <li>Wait for the audio to be transcribed</li>
+          <li>Review and save your note</li>
         </ol>
         <p style={{marginTop: '1rem', fontSize: '0.9rem'}}>
-          <strong>Note:</strong> If you previously denied microphone access, you'll need to enable it in your browser settings.
+          <strong>Note:</strong> Works on all devices including Android and iPhone!
         </p>
       </div>
     </div>
@@ -306,10 +308,9 @@ const Recorder = ({ onTranscriptComplete }) => {
 
 // ============================================================
 // COMPONENT: NotesList
-// Displays the list of saved notes with delete functionality
+// Displays the list of saved notes
 // ============================================================
 const NotesList = ({ notes, onDeleteNote, onClearAll }) => {
-  // Format date for display
   const formatDate = (isoString) => {
     const date = new Date(isoString);
     return date.toLocaleString('en-US', {
@@ -386,7 +387,7 @@ const App = () => {
     <div style={styles.app}>
       <header style={styles.header}>
         <h1 style={styles.appTitle}>Voice Notes App</h1>
-        <p style={styles.subtitle}>Record your thoughts with speech-to-text</p>
+        <p style={styles.subtitle}>Record your thoughts with AI-powered transcription</p>
       </header>
 
       <div style={styles.container}>
@@ -399,8 +400,10 @@ const App = () => {
       </div>
 
       <footer style={styles.footer}>
-        <p>Built with Web Speech API • Works best on Chrome for Android</p>
-        <p style={{fontSize: '0.85rem', marginTop: '0.5rem', opacity: 0.8}}>Notes are stored in memory and will be cleared when you close this page</p>
+        <p>Powered by Claude AI • Works on Android, iPhone, and all devices</p>
+        <p style={{fontSize: '0.85rem', marginTop: '0.5rem', opacity: 0.8}}>
+          Notes are stored in memory and will be cleared when you close this page
+        </p>
       </footer>
     </div>
   );
@@ -513,11 +516,32 @@ const styles = {
     marginBottom: '1rem',
     fontSize: '1rem',
     color: '#e65100',
+    fontWeight: '600',
   },
   recordingDot: {
     color: '#f44336',
     fontSize: '1.5rem',
     animation: 'pulse 1.5s infinite',
+  },
+  processingIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1rem',
+    padding: '1rem',
+    backgroundColor: '#e3f2fd',
+    borderRadius: '4px',
+    marginBottom: '1rem',
+    fontSize: '1rem',
+    color: '#1565c0',
+    fontWeight: '600',
+  },
+  spinner: {
+    width: '20px',
+    height: '20px',
+    border: '3px solid #bbdefb',
+    borderTop: '3px solid #1565c0',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
   },
   transcriptSection: {
     marginTop: '1.5rem',
@@ -614,5 +638,19 @@ const styles = {
     fontSize: '0.9rem',
   },
 };
+
+// Add CSS animations
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+`;
+document.head.appendChild(styleSheet);
 
 export default App;
