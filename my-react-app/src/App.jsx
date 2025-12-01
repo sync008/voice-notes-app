@@ -2,30 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 
 // ============================================================
 // CUSTOM HOOK: useLocalNotes
-// Manages notes in localStorage with CRUD operations
+// Manages notes in memory (localStorage not available in artifacts)
 // ============================================================
 const useLocalNotes = () => {
-  const STORAGE_KEY = 'voice_notes';
-
-  // Initialize notes from localStorage
-  const [notes, setNotes] = useState(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      return stored ? JSON.parse(stored) : [];
-    } catch (error) {
-      console.error('Error loading notes from localStorage:', error);
-      return [];
-    }
-  });
-
-  // Sync notes to localStorage whenever they change
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
-    } catch (error) {
-      console.error('Error saving notes to localStorage:', error);
-    }
-  }, [notes]);
+  // Initialize notes in memory
+  const [notes, setNotes] = useState([]);
 
   // Add a new note
   const addNote = (text) => {
@@ -71,22 +52,35 @@ const Recorder = ({ onTranscriptComplete }) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
     if (!SpeechRecognition) {
-      setError('Speech Recognition is not supported in this browser. Please use Chrome, Edge, or another Chromium-based browser.');
+      setError('Speech Recognition is not supported in this browser. Please use Chrome or another Chromium-based browser.');
       return;
     }
 
-    // Create recognition instance
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true; // Keep listening until stopped
-    recognition.interimResults = true; // Show interim results as user speaks
-    recognition.lang = 'en-US'; // Set language
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // Ignore errors on cleanup
+        }
+      }
+    };
+  }, []);
 
-    // Handle speech recognition results
+  // Create recognition instance on demand
+  const createRecognition = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return null;
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
     recognition.onresult = (event) => {
       let interimTranscript = '';
       let finalTranscript = '';
 
-      // Process all results
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcriptPiece = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
@@ -96,34 +90,39 @@ const Recorder = ({ onTranscriptComplete }) => {
         }
       }
 
-      // Update transcript with final + interim results
       setTranscript(prev => {
         const base = prev + finalTranscript;
         return base + (interimTranscript ? `[${interimTranscript}]` : '');
       });
     };
 
-    // Handle recognition errors
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      setError(`Recognition error: ${event.error}`);
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        setError('Microphone permission denied. Please allow microphone access and try again.');
+      } else if (event.error === 'no-speech') {
+        // Don't show error for no-speech, just continue
+      } else {
+        setError(`Recognition error: ${event.error}`);
+      }
       setIsListening(false);
     };
 
-    // Handle recognition end
     recognition.onend = () => {
       setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-
-    // Cleanup
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
+      // Auto-restart if still recording (for Android compatibility)
+      if (isRecording && recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+          setIsListening(true);
+        } catch (e) {
+          console.log('Could not restart recognition:', e);
+        }
       }
     };
-  }, []);
+
+    return recognition;
+  };
 
   // Start recording audio and speech recognition
   const startRecording = async () => {
@@ -132,8 +131,27 @@ const Recorder = ({ onTranscriptComplete }) => {
       setTranscript('');
       audioChunksRef.current = [];
 
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Request microphone access - this will prompt for permission if needed
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        });
+      } catch (permissionError) {
+        console.error('Microphone permission error:', permissionError);
+        if (permissionError.name === 'NotAllowedError' || permissionError.name === 'PermissionDeniedError') {
+          setError('Microphone access denied. Please allow microphone access in your browser settings and try again.');
+        } else if (permissionError.name === 'NotFoundError') {
+          setError('No microphone found. Please connect a microphone and try again.');
+        } else {
+          setError('Failed to access microphone. Please check your browser permissions and try again.');
+        }
+        return;
+      }
 
       // Setup MediaRecorder
       const mediaRecorder = new MediaRecorder(stream);
@@ -159,15 +177,22 @@ const Recorder = ({ onTranscriptComplete }) => {
       mediaRecorder.start();
       setIsRecording(true);
 
-      // Start speech recognition
-      if (recognitionRef.current) {
-        recognitionRef.current.start();
-        setIsListening(true);
+      // Create and start speech recognition
+      const recognition = createRecognition();
+      if (recognition) {
+        recognitionRef.current = recognition;
+        try {
+          recognition.start();
+          setIsListening(true);
+        } catch (speechError) {
+          console.error('Speech recognition start error:', speechError);
+          // Continue with recording even if speech recognition fails
+        }
       }
 
     } catch (err) {
       console.error('Error starting recording:', err);
-      setError('Failed to access microphone. Please grant permission and try again.');
+      setError('An unexpected error occurred. Please try again.');
     }
   };
 
@@ -181,7 +206,12 @@ const Recorder = ({ onTranscriptComplete }) => {
 
     // Stop Speech Recognition
     if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      } catch (e) {
+        console.log('Error stopping recognition:', e);
+      }
       setIsListening(false);
     }
   };
@@ -215,7 +245,7 @@ const Recorder = ({ onTranscriptComplete }) => {
           <button
             onClick={startRecording}
             style={{...styles.button, ...styles.startButton}}
-            disabled={!!error}
+            disabled={!!error && !error.includes('permission')}
           >
             ▶ Start Recording
           </button>
@@ -261,11 +291,14 @@ const Recorder = ({ onTranscriptComplete }) => {
       <div style={styles.info}>
         <p><strong>How to use:</strong></p>
         <ol style={styles.infoList}>
-          <li>Click "Start Recording" and grant microphone access</li>
+          <li>Click "Start Recording" and allow microphone access when prompted</li>
           <li>Speak clearly into your microphone</li>
           <li>Click "Stop Recording" when finished</li>
           <li>Review the transcript and save it as a note</li>
         </ol>
+        <p style={{marginTop: '1rem', fontSize: '0.9rem'}}>
+          <strong>Note:</strong> If you previously denied microphone access, you'll need to enable it in your browser settings.
+        </p>
       </div>
     </div>
   );
@@ -366,7 +399,8 @@ const App = () => {
       </div>
 
       <footer style={styles.footer}>
-        <p>Built with Web Speech API • Works on Chrome, Edge & Chromium browsers</p>
+        <p>Built with Web Speech API • Works best on Chrome for Android</p>
+        <p style={{fontSize: '0.85rem', marginTop: '0.5rem', opacity: 0.8}}>Notes are stored in memory and will be cleared when you close this page</p>
       </footer>
     </div>
   );
