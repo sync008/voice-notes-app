@@ -70,30 +70,17 @@ const Recorder = ({ onTranscriptComplete }) => {
     };
 
     recognition.onend = () => {
-      if (!isStoppedManually.current && isRecording) {
+      if (!isStoppedManually.current) {
         try {
           recognition.start();
         } catch (e) {
           console.error('Failed to restart recognition:', e);
         }
-      } else {
-        setIsRecording(false);
-        setInterimTranscript('');
       }
     };
 
     recognitionRef.current = recognition;
-    
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {
-          // Ignore errors on cleanup
-        }
-      }
-    };
-  }, [language, isRecording]);
+  }, [language]);
 
   const startRecording = () => {
     if (!recognitionRef.current) return;
@@ -108,8 +95,11 @@ const Recorder = ({ onTranscriptComplete }) => {
 
   const stopRecording = () => {
     isStoppedManually.current = true;
-    if (recognitionRef.current) recognitionRef.current.stop();
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
     setIsRecording(false);
+    setInterimTranscript('');
   };
 
   const saveNote = () => {
