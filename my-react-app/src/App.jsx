@@ -25,6 +25,7 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [error, setError] = useState('');
+  const [language, setLanguage] = useState('en-US');
   const recognitionRef = useRef(null);
   const isStoppedManually = useRef(false);
 
@@ -38,7 +39,7 @@ const Recorder = ({ onTranscriptComplete }) => {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = language;
 
     recognition.onresult = (event) => {
       let final = '';
@@ -78,7 +79,7 @@ const Recorder = ({ onTranscriptComplete }) => {
     };
 
     recognitionRef.current = recognition;
-  }, []);
+  }, [language]);
 
   const startRecording = () => {
     if (!recognitionRef.current) return;
@@ -117,6 +118,26 @@ const Recorder = ({ onTranscriptComplete }) => {
       <h2 className="title">Voice Recorder</h2>
 
       {error && <div className="error">{error}</div>}
+
+      <div className="language-section">
+        <h3 className="section-title">Language:</h3>
+        <div className="language-buttons">
+          <button
+            onClick={() => setLanguage('en-US')}
+            disabled={isRecording}
+            className={`button language-button ${language === 'en-US' ? 'language-button-active' : 'language-button-inactive'}`}
+          >
+            English
+          </button>
+          <button
+            onClick={() => setLanguage('tl-PH')}
+            disabled={isRecording}
+            className={`button language-button ${language === 'tl-PH' ? 'language-button-active' : 'language-button-inactive'}`}
+          >
+            Filipino/Tagalog
+          </button>
+        </div>
+      </div>
 
       <div className="controls">
         {!isRecording ? (
