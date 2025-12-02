@@ -101,15 +101,65 @@ const Recorder = ({ onNoteSaved }) => {
   const [error, setError] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [recognitionStarted, setRecognitionStarted] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [isListening, setIsListening] = useState(false);
   
   const mediaRecorderRef = useRef(null);
   const recognitionRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const streamRef = useRef(null);
   
   // Check browser support
   const mediaRecorderSupported = typeof MediaRecorder !== 'undefined';
   const speechRecognitionSupported = 
     'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+  const audioContextSupported = 
+    typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined';
+  
+  // Audio level monitoring with Web Audio API
+  const startAudioMonitoring = (stream) => {
+    if (!audioContextSupported) return;
+    
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextClass();
+    const analyser = audioContext.createAnalyser();
+    const microphone = audioContext.createMediaStreamSource(stream);
+    
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.8;
+    microphone.connect(analyser);
+    
+    audioContextRef.current = audioContext;
+    analyserRef.current = analyser;
+    
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    const updateLevel = () => {
+      if (!analyserRef.current) return;
+      
+      analyser.getByteFrequencyData(dataArray);
+      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+      const normalizedLevel = Math.min(100, (average / 128) * 100);
+      setAudioLevel(normalizedLevel);
+      
+      animationFrameRef.current = requestAnimationFrame(updateLevel);
+    };
+    
+    updateLevel();
+  };
+  
+  const stopAudioMonitoring = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+    }
+    setAudioLevel(0);
+  };
   
   useEffect(() => {
     if (!speechRecognitionSupported) return;
@@ -117,16 +167,16 @@ const Recorder = ({ onNoteSaved }) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     
+    // Android-optimized settings
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    
-    // Android Chrome needs 'en-US' but works better with these settings
     recognition.lang = 'en-US';
     
     recognition.onstart = () => {
       console.log('Speech recognition started');
       setRecognitionStarted(true);
+      setIsListening(true);
     };
     
     recognition.onresult = (event) => {
@@ -150,20 +200,35 @@ const Recorder = ({ onNoteSaved }) => {
     
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      
       if (event.error === 'no-speech') {
-        setError('No speech detected. Please speak closer to the microphone.');
+        // Don't show error for no-speech, just restart
+        console.log('No speech detected, waiting...');
       } else if (event.error === 'audio-capture') {
-        setError('No microphone found or microphone is being used by another app.');
+        setError('Microphone is being used by another app. Close other apps and try again.');
       } else if (event.error === 'not-allowed') {
-        setError('Microphone permission denied. Please allow microphone access.');
+        setError('Microphone permission denied. Please allow microphone access in browser settings.');
+      } else if (event.error === 'network') {
+        setError('Network error. Speech recognition requires internet connection.');
       } else {
         setError(`Recognition error: ${event.error}`);
       }
     };
     
     recognition.onend = () => {
+      console.log('Speech recognition ended');
+      setIsListening(false);
+      
+      // Auto-restart if still recording (for Android compatibility)
       if (isRecording) {
-        recognition.start();
+        setTimeout(() => {
+          try {
+            recognition.start();
+          } catch (err) {
+            console.log('Could not restart recognition:', err);
+          }
+        }, 100);
       }
     };
     
@@ -171,8 +236,13 @@ const Recorder = ({ onNoteSaved }) => {
     
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch (err) {
+          console.log('Recognition cleanup error:', err);
+        }
       }
+      stopAudioMonitoring();
     };
   }, [isRecording]);
   
@@ -181,6 +251,8 @@ const Recorder = ({ onNoteSaved }) => {
     setRawTranscription('');
     setInterpretedTranscription('');
     setInterimTranscript('');
+    setRecognitionStarted(false);
+    setIsListening(false);
     audioChunksRef.current = [];
     
     if (!mediaRecorderSupported) {
@@ -194,16 +266,32 @@ const Recorder = ({ onNoteSaved }) => {
     }
     
     try {
-      // Request microphone with specific constraints for better Android compatibility
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      // Request microphone with Android-optimized constraints
+      const constraints = {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
+          autoGainControl: true,
+          sampleRate: 48000,
+          channelCount: 1
+        }
+      };
       
-      const mediaRecorder = new MediaRecorder(stream);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      
+      // Start audio level monitoring
+      startAudioMonitoring(stream);
+      
+      // Setup MediaRecorder
+      let options = {};
+      if (MediaRecorder.isTypeSupported('audio/webm')) {
+        options = { mimeType: 'audio/webm' };
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        options = { mimeType: 'audio/mp4' };
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
       
       mediaRecorder.ondataavailable = (event) => {
@@ -212,21 +300,20 @@ const Recorder = ({ onNoteSaved }) => {
         }
       };
       
-      mediaRecorder.start();
+      mediaRecorder.start(100); // Collect data every 100ms
+      setIsRecording(true);
       
-      // Start speech recognition AFTER mediaRecorder starts
-      // Add a small delay for Android Chrome
+      // Start speech recognition with delay for Android
       setTimeout(() => {
         if (recognitionRef.current) {
           try {
             recognitionRef.current.start();
-            setIsRecording(true);
           } catch (err) {
             console.error('Recognition start error:', err);
             setError('Could not start speech recognition. Try refreshing the page.');
           }
         }
-      }, 100);
+      }, 300);
       
     } catch (err) {
       setError(`Microphone access error: ${err.message}`);
@@ -237,15 +324,25 @@ const Recorder = ({ onNoteSaved }) => {
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+    }
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
     }
     
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.log('Recognition stop error:', err);
+      }
     }
+    
+    stopAudioMonitoring();
     
     setIsRecording(false);
     setRecognitionStarted(false);
+    setIsListening(false);
     setInterimTranscript('');
     
     // Generate interpreted version
@@ -266,6 +363,14 @@ const Recorder = ({ onNoteSaved }) => {
   };
   
   const hasTranscription = rawTranscription.trim().length > 0 || interpretedTranscription.trim().length > 0;
+  
+  // Audio level bar color
+  const getAudioLevelColor = () => {
+    if (audioLevel < 10) return '#ccc';
+    if (audioLevel < 30) return '#4caf50';
+    if (audioLevel < 60) return '#8bc34a';
+    return '#cddc39';
+  };
   
   return (
     <div style={styles.recorder}>
@@ -297,17 +402,46 @@ const Recorder = ({ onNoteSaved }) => {
       </div>
       
       {isRecording && (
-        <div style={styles.recordingIndicator}>
-          <span style={styles.pulse}>🔴</span> Recording...
-          {recognitionStarted && <span style={{marginLeft: '10px'}}>🎤 Listening</span>}
-          {!recognitionStarted && <span style={{marginLeft: '10px', color: '#ff9800'}}>⚠️ Starting speech recognition...</span>}
-        </div>
+        <>
+          <div style={styles.recordingIndicator}>
+            <span style={styles.pulse}>🔴</span> Recording...
+            {isListening ? (
+              <span style={{marginLeft: '10px', color: '#4caf50'}}>🎤 Listening</span>
+            ) : (
+              <span style={{marginLeft: '10px', color: '#ff9800'}}>⚠️ Starting recognition...</span>
+            )}
+          </div>
+          
+          {/* Audio Level Visualizer */}
+          <div style={styles.audioLevelContainer}>
+            <div style={styles.audioLevelLabel}>
+              Microphone Level: {audioLevel > 5 ? '✅ Detecting sound' : '⚠️ No sound detected'}
+            </div>
+            <div style={styles.audioLevelBar}>
+              <div 
+                style={{
+                  ...styles.audioLevelFill,
+                  width: `${audioLevel}%`,
+                  backgroundColor: getAudioLevelColor()
+                }}
+              />
+            </div>
+            <div style={styles.audioLevelHint}>
+              {audioLevel < 5 && '🔇 Speak louder or move closer to microphone'}
+              {audioLevel >= 5 && audioLevel < 30 && '🔉 Good level'}
+              {audioLevel >= 30 && '🔊 Strong signal'}
+            </div>
+          </div>
+        </>
       )}
       
-      {isRecording && interimTranscript && (
+      {isRecording && (rawTranscription || interimTranscript) && (
         <div style={styles.interimBox}>
           <div style={styles.label}>Live Transcription:</div>
-          <div style={styles.interimText}>{rawTranscription + interimTranscript}</div>
+          <div style={styles.interimText}>
+            {rawTranscription}
+            <span style={{color: '#999'}}>{interimTranscript}</span>
+          </div>
         </div>
       )}
       
@@ -315,10 +449,11 @@ const Recorder = ({ onNoteSaved }) => {
         <div style={styles.transcriptions}>
           <div style={styles.transcriptionBox}>
             <div style={styles.label}>Raw Transcription:</div>
-            <div style={styles.transcriptionText}>{rawTranscription}</div>
+            <div style={styles.transcriptionText}>{rawTranscription || '(No transcription captured)'}</div>
             <button 
               onClick={() => saveNote('raw')}
               style={{...styles.button, ...styles.saveButton}}
+              disabled={!rawTranscription.trim()}
             >
               💾 Save Raw Version
             </button>
@@ -326,10 +461,11 @@ const Recorder = ({ onNoteSaved }) => {
           
           <div style={styles.transcriptionBox}>
             <div style={styles.label}>Interpreted Version:</div>
-            <div style={styles.transcriptionText}>{interpretedTranscription}</div>
+            <div style={styles.transcriptionText}>{interpretedTranscription || '(No transcription captured)'}</div>
             <button 
               onClick={() => saveNote('interpreted')}
               style={{...styles.button, ...styles.saveButton}}
+              disabled={!interpretedTranscription.trim()}
             >
               💾 Save Interpreted Version
             </button>
@@ -339,10 +475,28 @@ const Recorder = ({ onNoteSaved }) => {
       
       {(!mediaRecorderSupported || !speechRecognitionSupported) && (
         <div style={styles.browserInfo}>
-          <p><strong>Browser Support:</strong></p>
+          <p><strong>Browser Support Status:</strong></p>
           <p>✅ Desktop Chrome: Full support</p>
           <p>✅ Android Chrome: Full support</p>
           <p>⚠️ iOS Safari: Limited (no Web Speech API)</p>
+          {!speechRecognitionSupported && (
+            <p style={{marginTop: '10px', fontWeight: 'bold'}}>
+              ❌ Your browser doesn't support Web Speech API
+            </p>
+          )}
+        </div>
+      )}
+      
+      {isRecording && audioLevel < 5 && (
+        <div style={styles.troubleshootBox}>
+          <div style={styles.label}>🔧 Troubleshooting:</div>
+          <ul style={styles.troubleshootList}>
+            <li>Make sure no other app is using the microphone</li>
+            <li>Speak directly into the microphone</li>
+            <li>Check your phone's microphone isn't blocked or damaged</li>
+            <li>Try closing and reopening the browser</li>
+            <li>Check Chrome's site permissions (Settings → Site settings)</li>
+          </ul>
         </div>
       )}
     </div>
@@ -485,6 +639,36 @@ const styles = {
   pulse: {
     animation: 'pulse 1.5s ease-in-out infinite'
   },
+  audioLevelContainer: {
+    padding: '16px',
+    backgroundColor: '#f5f5f5',
+    borderRadius: '8px',
+    marginBottom: '16px'
+  },
+  audioLevelLabel: {
+    fontSize: '14px',
+    fontWeight: '600',
+    marginBottom: '8px',
+    color: '#333'
+  },
+  audioLevelBar: {
+    width: '100%',
+    height: '24px',
+    backgroundColor: '#e0e0e0',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    marginBottom: '8px'
+  },
+  audioLevelFill: {
+    height: '100%',
+    transition: 'width 0.1s ease-out, background-color 0.3s ease',
+    borderRadius: '12px'
+  },
+  audioLevelHint: {
+    fontSize: '12px',
+    color: '#666',
+    fontStyle: 'italic'
+  },
   interimBox: {
     padding: '16px',
     backgroundColor: '#f5f5f5',
@@ -520,8 +704,7 @@ const styles = {
   interimText: {
     fontSize: '16px',
     lineHeight: '1.6',
-    color: '#666',
-    fontStyle: 'italic'
+    color: '#333'
   },
   error: {
     padding: '12px',
@@ -537,6 +720,19 @@ const styles = {
     backgroundColor: '#fff3e0',
     borderRadius: '8px',
     fontSize: '14px',
+    color: '#e65100'
+  },
+  troubleshootBox: {
+    marginTop: '16px',
+    padding: '16px',
+    backgroundColor: '#fff3e0',
+    borderRadius: '8px',
+    border: '2px solid #ff9800'
+  },
+  troubleshootList: {
+    margin: '8px 0 0 0',
+    paddingLeft: '20px',
+    fontSize: '13px',
     color: '#e65100'
   },
   notesList: {
