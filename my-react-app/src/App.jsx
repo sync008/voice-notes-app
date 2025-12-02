@@ -28,11 +28,12 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [language, setLanguage] = useState('en-US');
   const recognitionRef = useRef(null);
   const isStoppedManually = useRef(false);
+  const startAttempts = useRef(0);
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported. Use Chrome on Android.');
+      setError('Speech recognition not supported. Use Chrome or Safari.');
       return;
     }
 
@@ -40,6 +41,11 @@ const Recorder = ({ onTranscriptComplete }) => {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = language;
+
+    recognition.onstart = () => {
+      console.log('Recognition started for language:', language);
+      startAttempts.current = 0;
+    };
 
     recognition.onresult = (event) => {
       let final = '';
@@ -59,33 +65,69 @@ const Recorder = ({ onTranscriptComplete }) => {
     };
 
     recognition.onerror = (event) => {
+      console.error('Recognition error:', event.error, 'for language:', language);
+      
       if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-        setError('Microphone access denied. Check Chrome permissions.');
+        setError('Microphone access denied. Check browser permissions.');
+        setIsRecording(false);
       } else if (event.error === 'audio-capture') {
         setError('Cannot access microphone. Close other apps using the mic.');
+        setIsRecording(false);
       } else if (event.error === 'network') {
         setError('No internet connection. Speech recognition requires internet.');
+        setIsRecording(false);
+      } else if (event.error === 'language-not-supported') {
+        setError('Filipino/Tagalog may not be supported on your device. Try English.');
+        setIsRecording(false);
+      } else if (event.error === 'no-speech') {
+        // Don't stop recording on no-speech, just continue
+        console.log('No speech detected, continuing...');
+      } else {
+        console.log('Other error:', event.error);
       }
-      setIsRecording(false);
     };
 
     recognition.onend = () => {
-      if (!isStoppedManually.current && isRecording) {
-        try {
-          setTimeout(() => {
-            if (!isStoppedManually.current) {
-              recognition.start();
-            }
-          }, 100);
-        } catch (e) {
-          console.error('Failed to restart recognition:', e);
+      console.log('Recognition ended. Stopped manually?', isStoppedManually.current);
+      
+      if (!isStoppedManually.current) {
+        startAttempts.current += 1;
+        
+        if (startAttempts.current > 10) {
+          setError(`Unable to start ${language === 'en-US' ? 'English' : 'Filipino'} recognition. Language may not be supported.`);
           setIsRecording(false);
+          startAttempts.current = 0;
+          return;
         }
+        
+        setTimeout(() => {
+          if (!isStoppedManually.current) {
+            try {
+              recognition.start();
+              console.log('Restarting recognition...');
+            } catch (e) {
+              console.error('Failed to restart:', e);
+            }
+          }
+        }, 200);
+      } else {
+        setIsRecording(false);
       }
     };
 
     recognitionRef.current = recognition;
-  }, [language, isRecording]);
+
+    return () => {
+      if (recognitionRef.current) {
+        isStoppedManually.current = true;
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
+      }
+    };
+  }, [language]);
 
   const startRecording = () => {
     if (!recognitionRef.current) return;
@@ -94,20 +136,40 @@ const Recorder = ({ onTranscriptComplete }) => {
     setInterimTranscript('');
     setError('');
     isStoppedManually.current = false;
+    startAttempts.current = 0;
     
     try {
       recognitionRef.current.start();
       setIsRecording(true);
+      console.log('Starting recording with language:', language);
     } catch (e) {
       console.error('Failed to start recognition:', e);
-      setError('Failed to start recording. Try again.');
+      if (e.message.includes('already started')) {
+        recognitionRef.current.stop();
+        setTimeout(() => {
+          try {
+            recognitionRef.current.start();
+            setIsRecording(true);
+          } catch (err) {
+            setError('Failed to start recording. Try again.');
+          }
+        }, 100);
+      } else {
+        setError('Failed to start recording. Try again.');
+      }
     }
   };
 
   const stopRecording = () => {
+    console.log('Stopping recording manually');
     isStoppedManually.current = true;
+    startAttempts.current = 0;
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.error('Stop error:', e);
+      }
     }
     setIsRecording(false);
     setInterimTranscript('');
@@ -145,13 +207,16 @@ const Recorder = ({ onTranscriptComplete }) => {
             English
           </button>
           <button
-            onClick={() => setLanguage('tl-PH')}
+            onClick={() => setLanguage('fil-PH')}
             disabled={isRecording}
-            className={`button language-button ${language === 'tl-PH' ? 'language-button-active' : 'language-button-inactive'}`}
+            className={`button language-button ${language === 'fil-PH' ? 'language-button-active' : 'language-button-inactive'}`}
           >
             Filipino/Tagalog
           </button>
         </div>
+        <p className="language-note">
+          Note: Filipino voice recognition may have limited support on iPhone/Safari
+        </p>
       </div>
 
       <div className="controls">
@@ -168,7 +233,7 @@ const Recorder = ({ onTranscriptComplete }) => {
 
       {isRecording && (
         <div className="recording-indicator">
-          <span className="recording-dot">●</span> RECORDING
+          <span className="recording-dot">●</span> RECORDING ({language === 'en-US' ? 'English' : 'Filipino'})
         </div>
       )}
 
@@ -243,7 +308,7 @@ const App = () => {
       </div>
 
       <footer className="footer">
-        <p>Best on Chrome for Android • Notes saved in browser memory</p>
+        <p>Works best on Chrome (Android/Desktop) • Limited language support on iPhone/Safari</p>
       </footer>
     </div>
   );
