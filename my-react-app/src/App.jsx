@@ -1,801 +1,855 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-// ============================================================================
-// UTILS: interpretText.js
-// ============================================================================
-const interpretText = (rawText) => {
-  if (!rawText) return '';
-  
-  let interpreted = rawText.trim();
-  
-  // Common misheard words (English)
-  const corrections = {
-    'their': 'there',
-    'your': 'you\'re',
-    'its': 'it\'s',
-    'cant': 'can\'t',
-    'wont': 'won\'t',
-    'dont': 'don\'t',
-    'im': 'I\'m',
-    'youre': 'you\'re',
-    'theyre': 'they\'re',
-    'gonna': 'going to',
-    'wanna': 'want to',
-    'gotta': 'got to',
-    'kinda': 'kind of',
-    'sorta': 'sort of',
-  };
-  
-  // Common Tagalog/Taglish corrections
-  const tagalogCorrections = {
-    'naman': 'naman',
-    'kasi': 'kasi',
-    'nga': 'nga',
-    'lang': 'lang',
-    'pala': 'pala',
-    'talaga': 'talaga',
-    'sige': 'sige',
-    'oo': 'oo',
-    'hindi': 'hindi',
-    'ano': 'ano',
-    'ba': 'ba',
-    'diba': 'di ba',
-    'para': 'para',
-    'yung': 'yung',
-    'pag': 'pag',
-  };
-  
-  // Apply corrections (case-insensitive word boundary matching)
-  Object.keys(corrections).forEach(wrong => {
-    const regex = new RegExp(`\\b${wrong}\\b`, 'gi');
-    interpreted = interpreted.replace(regex, corrections[wrong]);
-  });
-  
-  // Capitalize first letter of sentences
-  interpreted = interpreted.replace(/(^\w|[.!?]\s+\w)/g, match => match.toUpperCase());
-  
-  // Fix multiple spaces
-  interpreted = interpreted.replace(/\s+/g, ' ');
-  
-  // Add period at end if missing
-  if (interpreted && !interpreted.match(/[.!?]$/)) {
-    interpreted += '.';
-  }
-  
-  // Capitalize "I"
-  interpreted = interpreted.replace(/\bi\b/g, 'I');
-  
-  return interpreted;
-};
-
-// ============================================================================
-// HOOKS: useNotesMemory.js
-// ============================================================================
-const useNotesMemory = () => {
+// ============================================================
+// CUSTOM HOOK: useLocalNotes
+// ============================================================
+const useLocalNotes = () => {
   const [notes, setNotes] = useState([]);
-  
-  const addNote = (text, type) => {
+
+  const addNote = (text) => {
     const newNote = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      text,
-      type,
-      createdAt: new Date().toISOString()
+      text: text.trim(),
+      createdAt: new Date().toISOString(),
     };
     setNotes(prev => [newNote, ...prev]);
+    return newNote;
   };
-  
+
   const deleteNote = (id) => {
     setNotes(prev => prev.filter(note => note.id !== id));
   };
-  
-  return { notes, addNote, deleteNote };
+
+  const clearAllNotes = () => {
+    setNotes([]);
+  };
+
+  return { notes, addNote, deleteNote, clearAllNotes };
 };
 
-// ============================================================================
-// COMPONENTS: Recorder.jsx
-// ============================================================================
-const Recorder = ({ onNoteSaved }) => {
+// ============================================================
+// COMPONENT: Recorder
+// ============================================================
+const Recorder = ({ onTranscriptComplete }) => {
   const [isRecording, setIsRecording] = useState(false);
-  const [rawTranscription, setRawTranscription] = useState('');
-  const [interpretedTranscription, setInterpretedTranscription] = useState('');
-  const [error, setError] = useState('');
+  const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
-  const [recognitionStarted, setRecognitionStarted] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [isListening, setIsListening] = useState(false);
-  
-  const mediaRecorderRef = useRef(null);
+  const [error, setError] = useState('');
+  const [browserSupport, setBrowserSupport] = useState(true);
+  const [debugLogs, setDebugLogs] = useState([]);
+  const [hasDetectedAudio, setHasDetectedAudio] = useState(false);
+  const [recognitionActive, setRecognitionActive] = useState(false);
+
   const recognitionRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const animationFrameRef = useRef(null);
-  const streamRef = useRef(null);
-  
-  // Check browser support
-  const mediaRecorderSupported = typeof MediaRecorder !== 'undefined';
-  const speechRecognitionSupported = 
-    'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-  const audioContextSupported = 
-    typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined';
-  
-  // Audio level monitoring with Web Audio API
-  const startAudioMonitoring = (stream) => {
-    if (!audioContextSupported) return;
-    
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const audioContext = new AudioContextClass();
-    const analyser = audioContext.createAnalyser();
-    const microphone = audioContext.createMediaStreamSource(stream);
-    
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.8;
-    microphone.connect(analyser);
-    
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
-    
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    
-    const updateLevel = () => {
-      if (!analyserRef.current) return;
-      
-      analyser.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-      const normalizedLevel = Math.min(100, (average / 128) * 100);
-      setAudioLevel(normalizedLevel);
-      
-      animationFrameRef.current = requestAnimationFrame(updateLevel);
-    };
-    
-    updateLevel();
+  const isStoppedManually = useRef(false);
+  const restartTimeoutRef = useRef(null);
+  const lastResultTime = useRef(null);
+
+  // Add debug log
+  const addDebugLog = (message) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 15));
+    console.log(message);
   };
-  
-  const stopAudioMonitoring = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-    setAudioLevel(0);
-  };
-  
+
+  // Check browser support on mount
   useEffect(() => {
-    if (!speechRecognitionSupported) return;
-    
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setBrowserSupport(false);
+      setError('Speech recognition is not supported on this browser. Please use Chrome.');
+      addDebugLog('❌ Browser does not support speech recognition');
+    } else {
+      addDebugLog('✅ Browser supports speech recognition');
+      addDebugLog(`📱 User Agent: ${navigator.userAgent.substring(0, 50)}...`);
+    }
+  }, []);
+
+  // Initialize recognition with all event handlers
+  const initRecognition = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      addDebugLog('❌ SpeechRecognition not available');
+      return null;
+    }
+
     const recognition = new SpeechRecognition();
     
-    // Android-optimized settings
+    // CRITICAL: These settings work best on Android
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    recognition.lang = 'en-US';
     
+    // Try different language codes for better Android compatibility
+    try {
+      recognition.lang = 'en-US';
+      addDebugLog('⚙️ Language set to: en-US');
+    } catch (e) {
+      addDebugLog('⚠️ Could not set language');
+    }
+
+    addDebugLog('⚙️ Recognition configured');
+
     recognition.onstart = () => {
-      console.log('Speech recognition started');
-      setRecognitionStarted(true);
-      setIsListening(true);
+      addDebugLog('✅✅✅ Recognition STARTED - Listening now!');
+      setRecognitionActive(true);
+      setError('');
+      lastResultTime.current = Date.now();
     };
-    
+
+    recognition.onaudiostart = () => {
+      addDebugLog('🎤🎤🎤 AUDIO CAPTURE STARTED - Mic is active!');
+      setHasDetectedAudio(true);
+    };
+
+    recognition.onsoundstart = () => {
+      addDebugLog('🔊🔊🔊 SOUND DETECTED - System hears something!');
+    };
+
+    recognition.onspeechstart = () => {
+      addDebugLog('🗣️🗣️🗣️ SPEECH DETECTED - Processing your voice!');
+    };
+
     recognition.onresult = (event) => {
+      lastResultTime.current = Date.now();
       let interim = '';
       let final = '';
-      
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
+        const text = event.results[i][0].transcript;
+        const confidence = event.results[i][0].confidence;
+        
         if (event.results[i].isFinal) {
-          final += transcript + ' ';
+          final += text + ' ';
+          addDebugLog(`✅ FINAL: "${text}" (conf: ${confidence?.toFixed(2) || 'N/A'})`);
         } else {
-          interim += transcript;
+          interim += text;
+          addDebugLog(`⏳ INTERIM: "${text}"`);
         }
       }
-      
+
       if (final) {
-        setRawTranscription(prev => prev + final);
+        setTranscript(prev => prev + final);
       }
       setInterimTranscript(interim);
     };
-    
+
+    recognition.onspeechend = () => {
+      addDebugLog('🔇 Speech ended');
+    };
+
+    recognition.onsoundend = () => {
+      addDebugLog('🔇 Sound ended');
+    };
+
+    recognition.onaudioend = () => {
+      addDebugLog('🔇 Audio capture ended');
+      setHasDetectedAudio(false);
+    };
+
     recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      setIsListening(false);
+      addDebugLog(`❌❌❌ ERROR: ${event.error}`);
       
-      if (event.error === 'no-speech') {
-        // Don't show error for no-speech, just restart
-        console.log('No speech detected, waiting...');
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        setError('🚫 Microphone permission denied! Go to Chrome Settings → Site Settings → Microphone');
+        setIsRecording(false);
+        setRecognitionActive(false);
+        isStoppedManually.current = true;
+      } else if (event.error === 'no-speech') {
+        addDebugLog('⚠️ No speech detected - Keep talking!');
+        // Don't stop for no-speech on Android
       } else if (event.error === 'audio-capture') {
-        setError('Microphone is being used by another app. Close other apps and try again.');
-      } else if (event.error === 'not-allowed') {
-        setError('Microphone permission denied. Please allow microphone access in browser settings.');
+        setError('❌ Cannot access microphone! Close WhatsApp, Facebook, or other apps using the mic.');
+        setIsRecording(false);
+        setRecognitionActive(false);
+        isStoppedManually.current = true;
       } else if (event.error === 'network') {
-        setError('Network error. Speech recognition requires internet connection.');
-      } else {
-        setError(`Recognition error: ${event.error}`);
+        setError('🌐 No internet connection! Speech recognition needs internet.');
+        setIsRecording(false);
+        setRecognitionActive(false);
+        isStoppedManually.current = true;
+      } else if (event.error === 'aborted') {
+        if (!isStoppedManually.current) {
+          addDebugLog('⚠️ Recognition aborted - will restart');
+        }
+      } else if (event.error === 'service-not-allowed') {
+        setError('❌ Speech recognition service not available. Check internet connection.');
+        setIsRecording(false);
+        setRecognitionActive(false);
+        isStoppedManually.current = true;
       }
     };
-    
+
     recognition.onend = () => {
-      console.log('Speech recognition ended');
-      setIsListening(false);
+      addDebugLog('🛑 Recognition ended');
+      setRecognitionActive(false);
+      setInterimTranscript('');
       
-      // Auto-restart if still recording (for Android compatibility)
-      if (isRecording) {
-        setTimeout(() => {
-          try {
-            recognition.start();
-          } catch (err) {
-            console.log('Could not restart recognition:', err);
+      // Auto-restart if still recording and not stopped manually
+      if (!isStoppedManually.current && isRecording) {
+        addDebugLog('🔄 Auto-restarting in 300ms...');
+        restartTimeoutRef.current = setTimeout(() => {
+          if (recognitionRef.current && !isStoppedManually.current) {
+            try {
+              addDebugLog('🔄 Attempting restart...');
+              recognitionRef.current.start();
+            } catch (err) {
+              addDebugLog(`❌ Restart failed: ${err.message}`);
+              if (err.message.includes('already started')) {
+                addDebugLog('⚠️ Recognition already running');
+              } else {
+                setIsRecording(false);
+              }
+            }
           }
-        }, 100);
+        }, 300);
+      } else {
+        setIsRecording(false);
       }
     };
-    
-    recognitionRef.current = recognition;
-    
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (err) {
-          console.log('Recognition cleanup error:', err);
-        }
-      }
-      stopAudioMonitoring();
-    };
-  }, [isRecording]);
-  
-  const startRecording = async () => {
-    setError('');
-    setRawTranscription('');
-    setInterpretedTranscription('');
-    setInterimTranscript('');
-    setRecognitionStarted(false);
-    setIsListening(false);
-    audioChunksRef.current = [];
-    
-    if (!mediaRecorderSupported) {
-      setError('MediaRecorder not supported on this browser');
-      return;
-    }
-    
-    if (!speechRecognitionSupported) {
-      setError('Speech Recognition not supported on this browser (iOS Safari has limitations)');
-      return;
-    }
-    
-    try {
-      // Request microphone with Android-optimized constraints
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 48000,
-          channelCount: 1
-        }
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      
-      // Start audio level monitoring
-      startAudioMonitoring(stream);
-      
-      // Setup MediaRecorder
-      let options = {};
-      if (MediaRecorder.isTypeSupported('audio/webm')) {
-        options = { mimeType: 'audio/webm' };
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        options = { mimeType: 'audio/mp4' };
-      }
-      
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-      
-      mediaRecorder.start(100); // Collect data every 100ms
-      setIsRecording(true);
-      
-      // Start speech recognition with delay for Android
-      setTimeout(() => {
-        if (recognitionRef.current) {
-          try {
-            recognitionRef.current.start();
-          } catch (err) {
-            console.error('Recognition start error:', err);
-            setError('Could not start speech recognition. Try refreshing the page.');
-          }
-        }
-      }, 300);
-      
-    } catch (err) {
-      setError(`Microphone access error: ${err.message}`);
-      console.error('MediaRecorder error:', err);
-    }
+
+    return recognition;
   };
-  
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
+
+  // Start recording
+  const startRecording = async () => {
+    if (!browserSupport) return;
+
+    addDebugLog('═══════════════════════════════════');
+    addDebugLog('🎬 STARTING NEW RECORDING SESSION');
+    addDebugLog('═══════════════════════════════════');
     
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+    setError('');
+    setTranscript('');
+    setInterimTranscript('');
+    setHasDetectedAudio(false);
+    setRecognitionActive(false);
+    isStoppedManually.current = false;
+
+    // Clear any existing timeout
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
     }
-    
+
+    // Stop any existing recognition
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch (err) {
-        console.log('Recognition stop error:', err);
+      } catch (e) {
+        // Ignore
       }
+      recognitionRef.current = null;
     }
+
+    // Initialize fresh recognition
+    addDebugLog('🔧 Initializing recognition...');
+    const recognition = initRecognition();
+    if (!recognition) {
+      setError('Could not initialize speech recognition.');
+      addDebugLog('❌ Recognition initialization failed');
+      return;
+    }
+
+    recognitionRef.current = recognition;
     
-    stopAudioMonitoring();
-    
+    // Start recognition immediately
+    addDebugLog('🚀 Starting recognition...');
+    try {
+      recognition.start();
+      setIsRecording(true);
+      addDebugLog('✅ Recognition.start() called successfully');
+      
+      // Check after 3 seconds if we got any audio
+      setTimeout(() => {
+        if (!hasDetectedAudio && isRecording && !isStoppedManually.current) {
+          addDebugLog('⚠️⚠️⚠️ NO AUDIO DETECTED after 3 seconds!');
+          addDebugLog('💡 Try these:');
+          addDebugLog('   1. Speak VERY LOUDLY');
+          addDebugLog('   2. Check if another app is using mic');
+          addDebugLog('   3. Restart Chrome browser');
+          addDebugLog('   4. Check Chrome has mic permission in Android Settings');
+        }
+      }, 3000);
+      
+    } catch (err) {
+      addDebugLog(`❌ Start failed: ${err.message}`);
+      setError(`Failed to start: ${err.message}`);
+      setIsRecording(false);
+    }
+  };
+
+  // Stop recording
+  const stopRecording = () => {
+    addDebugLog('⏹️⏹️⏹️ STOP BUTTON PRESSED');
+    isStoppedManually.current = true;
+
+    // Clear restart timeout
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+        addDebugLog('✅ Recognition stopped');
+      } catch (err) {
+        addDebugLog(`⚠️ Stop error: ${err.message}`);
+      }
+      recognitionRef.current = null;
+    }
+
     setIsRecording(false);
-    setRecognitionStarted(false);
-    setIsListening(false);
+    setRecognitionActive(false);
     setInterimTranscript('');
-    
-    // Generate interpreted version
-    const finalTranscript = rawTranscription + (interimTranscript || '');
-    setRawTranscription(finalTranscript);
-    const interpreted = interpretText(finalTranscript);
-    setInterpretedTranscription(interpreted);
+    addDebugLog('═══════════════════════════════════');
   };
-  
-  const saveNote = (type) => {
-    const text = type === 'raw' ? rawTranscription : interpretedTranscription;
-    if (text.trim()) {
-      onNoteSaved(text, type);
-      setRawTranscription('');
-      setInterpretedTranscription('');
+
+  // Save note
+  const saveNote = () => {
+    if (transcript.trim()) {
+      onTranscriptComplete(transcript.trim());
+      setTranscript('');
       setInterimTranscript('');
+      addDebugLog('💾 Note saved!');
     }
   };
-  
-  const hasTranscription = rawTranscription.trim().length > 0 || interpretedTranscription.trim().length > 0;
-  
-  // Audio level bar color
-  const getAudioLevelColor = () => {
-    if (audioLevel < 10) return '#ccc';
-    if (audioLevel < 30) return '#4caf50';
-    if (audioLevel < 60) return '#8bc34a';
-    return '#cddc39';
+
+  // Discard transcript
+  const discardTranscript = () => {
+    setTranscript('');
+    setInterimTranscript('');
+    addDebugLog('🗑️ Transcript discarded');
   };
-  
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current);
+      }
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // Ignore
+        }
+      }
+    };
+  }, []);
+
+  const displayText = transcript + (interimTranscript ? ` ${interimTranscript}` : '');
+
   return (
     <div style={styles.recorder}>
-      <h2 style={styles.title}>🎤 Voice Notes</h2>
-      
-      {error && (
+      <h2 style={styles.title}>🎤 Voice Recorder</h2>
+
+      {!browserSupport && (
         <div style={styles.error}>
-          ⚠️ {error}
+          ⚠️ Speech recognition is not supported on this browser. 
+          <br />
+          Please use <strong>Chrome</strong> on Android.
         </div>
       )}
-      
+
+      {error && browserSupport && (
+        <div style={styles.error}>
+          {error}
+        </div>
+      )}
+
       <div style={styles.controls}>
         {!isRecording ? (
-          <button 
+          <button
             onClick={startRecording}
             style={{...styles.button, ...styles.startButton}}
-            disabled={!mediaRecorderSupported || !speechRecognitionSupported}
+            disabled={!browserSupport}
           >
-            ▶️ Start Recording
+            ▶ Start Recording
           </button>
         ) : (
-          <button 
+          <button
             onClick={stopRecording}
             style={{...styles.button, ...styles.stopButton}}
           >
-            ⏹️ Stop Recording
+            ⏹ Stop Recording
           </button>
         )}
       </div>
-      
+
       {isRecording && (
-        <>
+        <div style={styles.statusSection}>
           <div style={styles.recordingIndicator}>
-            <span style={styles.pulse}>🔴</span> Recording...
-            {isListening ? (
-              <span style={{marginLeft: '10px', color: '#4caf50'}}>🎤 Listening</span>
-            ) : (
-              <span style={{marginLeft: '10px', color: '#ff9800'}}>⚠️ Starting recognition...</span>
-            )}
+            <span style={styles.recordingDot}>●</span> 
+            <span>RECORDING</span>
           </div>
           
-          {/* Audio Level Visualizer */}
-          <div style={styles.audioLevelContainer}>
-            <div style={styles.audioLevelLabel}>
-              Microphone Level: {audioLevel > 5 ? '✅ Detecting sound' : '⚠️ No sound detected'}
+          <div style={styles.statusGrid}>
+            <div style={recognitionActive ? styles.statusActive : styles.statusInactive}>
+              {recognitionActive ? '✅ Recognition Active' : '⏳ Starting...'}
             </div>
-            <div style={styles.audioLevelBar}>
-              <div 
-                style={{
-                  ...styles.audioLevelFill,
-                  width: `${audioLevel}%`,
-                  backgroundColor: getAudioLevelColor()
-                }}
-              />
-            </div>
-            <div style={styles.audioLevelHint}>
-              {audioLevel < 5 && '🔇 Speak louder or move closer to microphone'}
-              {audioLevel >= 5 && audioLevel < 30 && '🔉 Good level'}
-              {audioLevel >= 30 && '🔊 Strong signal'}
+            <div style={hasDetectedAudio ? styles.statusActive : styles.statusInactive}>
+              {hasDetectedAudio ? '✅ Audio Detected' : '⚠️ No Audio Yet'}
             </div>
           </div>
-        </>
-      )}
-      
-      {isRecording && (rawTranscription || interimTranscript) && (
-        <div style={styles.interimBox}>
-          <div style={styles.label}>Live Transcription:</div>
-          <div style={styles.interimText}>
-            {rawTranscription}
-            <span style={{color: '#999'}}>{interimTranscript}</span>
-          </div>
-        </div>
-      )}
-      
-      {!isRecording && hasTranscription && (
-        <div style={styles.transcriptions}>
-          <div style={styles.transcriptionBox}>
-            <div style={styles.label}>Raw Transcription:</div>
-            <div style={styles.transcriptionText}>{rawTranscription || '(No transcription captured)'}</div>
-            <button 
-              onClick={() => saveNote('raw')}
-              style={{...styles.button, ...styles.saveButton}}
-              disabled={!rawTranscription.trim()}
-            >
-              💾 Save Raw Version
-            </button>
-          </div>
-          
-          <div style={styles.transcriptionBox}>
-            <div style={styles.label}>Interpreted Version:</div>
-            <div style={styles.transcriptionText}>{interpretedTranscription || '(No transcription captured)'}</div>
-            <button 
-              onClick={() => saveNote('interpreted')}
-              style={{...styles.button, ...styles.saveButton}}
-              disabled={!interpretedTranscription.trim()}
-            >
-              💾 Save Interpreted Version
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {(!mediaRecorderSupported || !speechRecognitionSupported) && (
-        <div style={styles.browserInfo}>
-          <p><strong>Browser Support Status:</strong></p>
-          <p>✅ Desktop Chrome: Full support</p>
-          <p>✅ Android Chrome: Full support</p>
-          <p>⚠️ iOS Safari: Limited (no Web Speech API)</p>
-          {!speechRecognitionSupported && (
-            <p style={{marginTop: '10px', fontWeight: 'bold'}}>
-              ❌ Your browser doesn't support Web Speech API
-            </p>
+
+          {isRecording && !hasDetectedAudio && (
+            <div style={styles.warningBox}>
+              <strong>⚠️ No audio detected yet!</strong>
+              <ul style={{margin: '0.5rem 0', paddingLeft: '1.5rem'}}>
+                <li>Speak LOUDLY and clearly</li>
+                <li>Make sure no other app is using the microphone</li>
+                <li>Check microphone permissions in Chrome settings</li>
+              </ul>
+            </div>
           )}
         </div>
       )}
-      
-      {isRecording && audioLevel < 5 && (
-        <div style={styles.troubleshootBox}>
-          <div style={styles.label}>🔧 Troubleshooting:</div>
-          <ul style={styles.troubleshootList}>
-            <li>Make sure no other app is using the microphone</li>
-            <li>Speak directly into the microphone</li>
-            <li>Check your phone's microphone isn't blocked or damaged</li>
-            <li>Try closing and reopening the browser</li>
-            <li>Check Chrome's site permissions (Settings → Site settings)</li>
-          </ul>
+
+      {displayText && (
+        <div style={styles.transcriptSection}>
+          <h3 style={styles.sectionTitle}>📝 Transcript:</h3>
+          <div style={styles.transcriptBox}>
+            {transcript}
+            {interimTranscript && (
+              <span style={{color: '#999', fontStyle: 'italic'}}> {interimTranscript}</span>
+            )}
+          </div>
+          {!isRecording && transcript && (
+            <div style={styles.transcriptActions}>
+              <button
+                onClick={saveNote}
+                style={{...styles.button, ...styles.saveButton}}
+              >
+                💾 Save as Note
+              </button>
+              <button
+                onClick={discardTranscript}
+                style={{...styles.button, ...styles.discardButton}}
+              >
+                🗑️ Discard
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      <div style={styles.debugSection}>
+        <h3 style={styles.sectionTitle}>🔍 Debug Log:</h3>
+        <div style={styles.debugBox}>
+          {debugLogs.length === 0 ? (
+            <div style={{color: '#666'}}>No events yet. Click "Start Recording" to begin.</div>
+          ) : (
+            debugLogs.map((log, idx) => (
+              <div key={idx} style={styles.debugLine}>{log}</div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div style={styles.info}>
+        <p><strong>🔧 Critical Debugging Steps:</strong></p>
+        <ol style={styles.infoList}>
+          <li><strong>Look for "🎤 AUDIO CAPTURE STARTED"</strong> in the log - if you don't see this, the mic isn't being accessed</li>
+          <li><strong>Look for "🔊 SOUND DETECTED"</strong> - if you see this, your voice IS being heard</li>
+          <li><strong>If you see "✅ Recognition STARTED" but NO "🎤 AUDIO CAPTURE"</strong>:
+            <ul style={{marginTop: '0.5rem'}}>
+              <li>Another app is using the microphone</li>
+              <li>Chrome doesn't have microphone permission</li>
+              <li>Go to Android Settings → Apps → Chrome → Permissions → Microphone → Allow</li>
+            </ul>
+          </li>
+          <li><strong>Speak VERY LOUDLY</strong> for the first test</li>
+          <li>If nothing works: Close Chrome completely and reopen</li>
+        </ol>
+      </div>
     </div>
   );
 };
 
-// ============================================================================
-// COMPONENTS: NotesList.jsx
-// ============================================================================
-const NotesList = ({ notes, onDeleteNote }) => {
+// ============================================================
+// COMPONENT: NotesList
+// ============================================================
+const NotesList = ({ notes, onDeleteNote, onClearAll }) => {
   const formatDate = (isoString) => {
     const date = new Date(isoString);
     return date.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
+      year: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
     });
   };
-  
-  if (notes.length === 0) {
-    return (
-      <div style={styles.notesList}>
-        <h3 style={styles.notesTitle}>📋 Your Notes</h3>
-        <p style={styles.emptyState}>No notes yet. Start recording to create your first note!</p>
-      </div>
-    );
-  }
-  
+
   return (
     <div style={styles.notesList}>
-      <h3 style={styles.notesTitle}>📋 Your Notes ({notes.length})</h3>
-      {notes.map(note => (
-        <div key={note.id} style={styles.noteCard}>
-          <div style={styles.noteHeader}>
-            <span style={{
-              ...styles.noteType,
-              backgroundColor: note.type === 'raw' ? '#e3f2fd' : '#f3e5f5',
-              color: note.type === 'raw' ? '#1565c0' : '#6a1b9a'
-            }}>
-              {note.type === 'raw' ? '📝 Raw' : '✨ Interpreted'}
-            </span>
-            <span style={styles.noteDate}>{formatDate(note.createdAt)}</span>
-          </div>
-          <p style={styles.noteText}>{note.text}</p>
-          <button 
-            onClick={() => onDeleteNote(note.id)}
-            style={styles.deleteButton}
+      <div style={styles.notesHeader}>
+        <h2 style={styles.title}>📝 My Notes ({notes.length})</h2>
+        {notes.length > 0 && (
+          <button
+            onClick={onClearAll}
+            style={{...styles.button, ...styles.clearButton}}
           >
-            🗑️ Delete
+            Clear All
           </button>
+        )}
+      </div>
+
+      {notes.length === 0 ? (
+        <div style={styles.emptyState}>
+          <p>No notes yet. Start recording to create your first note!</p>
         </div>
-      ))}
+      ) : (
+        <div style={styles.notesGrid}>
+          {notes.map(note => (
+            <div key={note.id} style={styles.noteCard}>
+              <div style={styles.noteHeader}>
+                <span style={styles.noteDate}>{formatDate(note.createdAt)}</span>
+                <button
+                  onClick={() => onDeleteNote(note.id)}
+                  style={{...styles.button, ...styles.deleteButton}}
+                  title="Delete note"
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={styles.noteText}>
+                {note.text}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
 
-// ============================================================================
-// APP COMPONENT
-// ============================================================================
+// ============================================================
+// MAIN APP
+// ============================================================
 const App = () => {
-  const { notes, addNote, deleteNote } = useNotesMemory();
-  
+  const { notes, addNote, deleteNote, clearAllNotes } = useLocalNotes();
+
+  const handleTranscriptComplete = (text) => {
+    if (text) {
+      addNote(text);
+    }
+  };
+
+  const handleClearAll = () => {
+    if (window.confirm('Are you sure you want to delete all notes? This cannot be undone.')) {
+      clearAllNotes();
+    }
+  };
+
   return (
     <div style={styles.app}>
+      <header style={styles.header}>
+        <h1 style={styles.appTitle}>🎤 Voice Notes</h1>
+        <p style={styles.subtitle}>Android-Optimized Speech Recognition</p>
+      </header>
+
       <div style={styles.container}>
-        <Recorder onNoteSaved={addNote} />
-        <NotesList notes={notes} onDeleteNote={deleteNote} />
+        <Recorder onTranscriptComplete={handleTranscriptComplete} />
+        <NotesList 
+          notes={notes} 
+          onDeleteNote={deleteNote}
+          onClearAll={handleClearAll}
+        />
       </div>
+
+      <footer style={styles.footer}>
+        <p>📱 Optimized for Chrome on Android</p>
+        <p style={{fontSize: '0.85rem', marginTop: '0.5rem', opacity: 0.8}}>
+          Notes stored in memory • Cleared when page closes
+        </p>
+      </footer>
     </div>
   );
 };
 
-// ============================================================================
+// ============================================================
 // STYLES
-// ============================================================================
+// ============================================================
 const styles = {
   app: {
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
-    padding: '20px',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif',
+  },
+  header: {
+    backgroundColor: '#4CAF50',
+    color: 'white',
+    padding: '2rem',
+    textAlign: 'center',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  },
+  appTitle: {
+    margin: 0,
+    fontSize: '2rem',
+    fontWeight: 'bold',
+  },
+  subtitle: {
+    margin: '0.5rem 0 0 0',
+    fontSize: '1rem',
+    opacity: 0.9,
   },
   container: {
-    maxWidth: '800px',
-    margin: '0 auto'
+    maxWidth: '1200px',
+    margin: '0 auto',
+    padding: '1.5rem',
+    display: 'grid',
+    gridTemplateColumns: '1fr',
+    gap: '1.5rem',
   },
   recorder: {
     backgroundColor: 'white',
-    borderRadius: '12px',
-    padding: '24px',
-    marginBottom: '24px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+    padding: '1.5rem',
+    borderRadius: '8px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
   },
   title: {
-    margin: '0 0 20px 0',
-    fontSize: '24px',
-    fontWeight: '600',
-    color: '#333'
+    margin: '0 0 1rem 0',
+    fontSize: '1.5rem',
+    color: '#333',
+  },
+  error: {
+    backgroundColor: '#ffebee',
+    color: '#c62828',
+    padding: '1rem',
+    borderRadius: '4px',
+    marginBottom: '1rem',
+    border: '2px solid #ef5350',
+    lineHeight: '1.5',
+    fontWeight: '500',
   },
   controls: {
-    marginBottom: '20px'
+    display: 'flex',
+    gap: '1rem',
+    marginBottom: '1rem',
   },
   button: {
-    padding: '12px 24px',
-    fontSize: '16px',
-    fontWeight: '500',
+    padding: '0.75rem 1.5rem',
+    fontSize: '1rem',
+    fontWeight: '600',
     border: 'none',
-    borderRadius: '8px',
+    borderRadius: '4px',
     cursor: 'pointer',
     transition: 'all 0.2s',
-    fontFamily: 'inherit'
   },
   startButton: {
-    backgroundColor: '#4caf50',
-    color: 'white'
+    backgroundColor: '#4CAF50',
+    color: 'white',
+    fontSize: '1.1rem',
+    padding: '1rem 2rem',
   },
   stopButton: {
     backgroundColor: '#f44336',
-    color: 'white'
+    color: 'white',
+    fontSize: '1.1rem',
+    padding: '1rem 2rem',
   },
   saveButton: {
-    backgroundColor: '#2196f3',
+    backgroundColor: '#2196F3',
     color: 'white',
-    marginTop: '12px',
-    width: '100%'
+  },
+  discardButton: {
+    backgroundColor: '#757575',
+    color: 'white',
+  },
+  clearButton: {
+    backgroundColor: '#ff9800',
+    color: 'white',
+    fontSize: '0.9rem',
+    padding: '0.5rem 1rem',
+  },
+  deleteButton: {
+    backgroundColor: '#f44336',
+    color: 'white',
+    fontSize: '1.2rem',
+    padding: '0.25rem 0.5rem',
+    minWidth: 'auto',
+  },
+  statusSection: {
+    marginBottom: '1rem',
   },
   recordingIndicator: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '12px',
+    justifyContent: 'center',
+    gap: '0.5rem',
+    padding: '1rem',
     backgroundColor: '#ffebee',
-    borderRadius: '8px',
-    marginBottom: '16px',
-    fontSize: '14px',
-    fontWeight: '500',
-    color: '#c62828'
+    borderRadius: '4px',
+    marginBottom: '1rem',
+    fontSize: '1.2rem',
+    color: '#d32f2f',
+    fontWeight: 'bold',
+    border: '2px solid #ef5350',
   },
-  pulse: {
-    animation: 'pulse 1.5s ease-in-out infinite'
+  recordingDot: {
+    color: '#f44336',
+    fontSize: '1.5rem',
+    animation: 'pulse 1.5s infinite',
   },
-  audioLevelContainer: {
-    padding: '16px',
-    backgroundColor: '#f5f5f5',
-    borderRadius: '8px',
-    marginBottom: '16px'
-  },
-  audioLevelLabel: {
-    fontSize: '14px',
-    fontWeight: '600',
-    marginBottom: '8px',
-    color: '#333'
-  },
-  audioLevelBar: {
-    width: '100%',
-    height: '24px',
-    backgroundColor: '#e0e0e0',
-    borderRadius: '12px',
-    overflow: 'hidden',
-    marginBottom: '8px'
-  },
-  audioLevelFill: {
-    height: '100%',
-    transition: 'width 0.1s ease-out, background-color 0.3s ease',
-    borderRadius: '12px'
-  },
-  audioLevelHint: {
-    fontSize: '12px',
-    color: '#666',
-    fontStyle: 'italic'
-  },
-  interimBox: {
-    padding: '16px',
-    backgroundColor: '#f5f5f5',
-    borderRadius: '8px',
-    marginBottom: '16px'
-  },
-  transcriptions: {
+  statusGrid: {
     display: 'grid',
-    gap: '16px',
-    marginTop: '20px'
+    gridTemplateColumns: '1fr 1fr',
+    gap: '0.5rem',
+    marginBottom: '1rem',
   },
-  transcriptionBox: {
-    padding: '16px',
-    border: '2px solid #e0e0e0',
-    borderRadius: '8px',
-    backgroundColor: '#fafafa'
-  },
-  label: {
-    fontSize: '14px',
+  statusActive: {
+    padding: '0.75rem',
+    backgroundColor: '#e8f5e9',
+    color: '#2e7d32',
+    borderRadius: '4px',
+    textAlign: 'center',
     fontWeight: '600',
-    color: '#666',
-    marginBottom: '8px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px'
+    border: '2px solid #66bb6a',
   },
-  transcriptionText: {
-    fontSize: '16px',
+  statusInactive: {
+    padding: '0.75rem',
+    backgroundColor: '#fff3e0',
+    color: '#e65100',
+    borderRadius: '4px',
+    textAlign: 'center',
+    fontWeight: '600',
+    border: '2px solid #ffb74d',
+  },
+  warningBox: {
+    padding: '1rem',
+    backgroundColor: '#fff3e0',
+    borderRadius: '4px',
+    border: '2px solid #ff9800',
+    color: '#e65100',
+    fontSize: '0.95rem',
+  },
+  transcriptSection: {
+    marginTop: '1.5rem',
+    padding: '1rem',
+    backgroundColor: '#f9f9f9',
+    borderRadius: '4px',
+    border: '1px solid #e0e0e0',
+  },
+  sectionTitle: {
+    margin: '0 0 0.75rem 0',
+    fontSize: '1.1rem',
+    color: '#555',
+  },
+  transcriptBox: {
+    backgroundColor: 'white',
+    padding: '1rem',
+    borderRadius: '4px',
+    border: '1px solid #ddd',
+    minHeight: '100px',
+    marginBottom: '1rem',
+    fontSize: '1rem',
     lineHeight: '1.6',
     color: '#333',
-    marginBottom: '12px',
-    minHeight: '60px'
+    whiteSpace: 'pre-wrap',
+    wordWrap: 'break-word',
   },
-  interimText: {
-    fontSize: '16px',
-    lineHeight: '1.6',
-    color: '#333'
+  transcriptActions: {
+    display: 'flex',
+    gap: '1rem',
   },
-  error: {
-    padding: '12px',
-    backgroundColor: '#ffebee',
-    color: '#c62828',
-    borderRadius: '8px',
-    marginBottom: '16px',
-    fontSize: '14px'
+  debugSection: {
+    marginTop: '1.5rem',
+    padding: '1rem',
+    backgroundColor: '#263238',
+    borderRadius: '4px',
   },
-  browserInfo: {
-    marginTop: '20px',
-    padding: '16px',
-    backgroundColor: '#fff3e0',
-    borderRadius: '8px',
-    fontSize: '14px',
-    color: '#e65100'
+  debugBox: {
+    backgroundColor: '#1e1e1e',
+    color: '#00ff00',
+    padding: '1rem',
+    borderRadius: '4px',
+    fontFamily: 'monospace',
+    fontSize: '0.8rem',
+    maxHeight: '300px',
+    overflowY: 'auto',
+    lineHeight: '1.4',
   },
-  troubleshootBox: {
-    marginTop: '16px',
-    padding: '16px',
-    backgroundColor: '#fff3e0',
-    borderRadius: '8px',
-    border: '2px solid #ff9800'
+  debugLine: {
+    marginBottom: '0.2rem',
   },
-  troubleshootList: {
-    margin: '8px 0 0 0',
-    paddingLeft: '20px',
-    fontSize: '13px',
-    color: '#e65100'
+  info: {
+    marginTop: '1.5rem',
+    padding: '1rem',
+    backgroundColor: '#e3f2fd',
+    borderRadius: '4px',
+    fontSize: '0.9rem',
+    color: '#1565c0',
+    border: '2px solid #64b5f6',
+  },
+  infoList: {
+    margin: '0.5rem 0 0 0',
+    paddingLeft: '1.5rem',
+    lineHeight: '1.8',
   },
   notesList: {
     backgroundColor: 'white',
-    borderRadius: '12px',
-    padding: '24px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+    padding: '1.5rem',
+    borderRadius: '8px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
   },
-  notesTitle: {
-    margin: '0 0 20px 0',
-    fontSize: '20px',
-    fontWeight: '600',
-    color: '#333'
+  notesHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '1rem',
   },
   emptyState: {
     textAlign: 'center',
+    padding: '2rem 1rem',
     color: '#999',
-    padding: '40px 20px',
-    fontSize: '14px'
+    fontSize: '1rem',
+  },
+  notesGrid: {
+    display: 'grid',
+    gap: '1rem',
   },
   noteCard: {
-    padding: '16px',
+    backgroundColor: '#fafafa',
     border: '1px solid #e0e0e0',
-    borderRadius: '8px',
-    marginBottom: '12px',
-    backgroundColor: '#fafafa'
+    borderRadius: '6px',
+    padding: '1rem',
   },
   noteHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '12px',
-    flexWrap: 'wrap',
-    gap: '8px'
-  },
-  noteType: {
-    padding: '4px 12px',
-    borderRadius: '12px',
-    fontSize: '12px',
-    fontWeight: '600'
+    marginBottom: '0.75rem',
   },
   noteDate: {
-    fontSize: '12px',
-    color: '#999'
+    fontSize: '0.85rem',
+    color: '#757575',
+    fontWeight: '500',
   },
   noteText: {
-    fontSize: '15px',
+    fontSize: '1rem',
     lineHeight: '1.6',
     color: '#333',
-    margin: '0 0 12px 0',
-    wordWrap: 'break-word'
+    whiteSpace: 'pre-wrap',
+    wordWrap: 'break-word',
   },
-  deleteButton: {
-    padding: '8px 16px',
-    fontSize: '14px',
-    backgroundColor: '#ffebee',
-    color: '#c62828',
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    fontWeight: '500'
-  }
+  footer: {
+    textAlign: 'center',
+    padding: '2rem',
+    color: '#757575',
+    fontSize: '0.9rem',
+  },
 };
+
+// Add animations
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+`;
+document.head.appendChild(styleSheet);
 
 export default App;
