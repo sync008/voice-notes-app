@@ -71,7 +71,11 @@ const Recorder = ({ onTranscriptComplete }) => {
 
     recognition.onend = () => {
       if (!isStoppedManually.current && isRecording) {
-        recognition.start();
+        try {
+          recognition.start();
+        } catch (e) {
+          console.error('Failed to restart recognition:', e);
+        }
       } else {
         setIsRecording(false);
         setInterimTranscript('');
@@ -79,7 +83,17 @@ const Recorder = ({ onTranscriptComplete }) => {
     };
 
     recognitionRef.current = recognition;
-  }, [language]);
+    
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // Ignore errors on cleanup
+        }
+      }
+    };
+  }, [language, isRecording]);
 
   const startRecording = () => {
     if (!recognitionRef.current) return;
