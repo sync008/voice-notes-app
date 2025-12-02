@@ -42,6 +42,11 @@ const Recorder = ({ onTranscriptComplete }) => {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = language;
+    
+    // Disable sound effects on iOS/Safari
+    if (recognition.audiostart !== undefined) {
+      recognition.audiostart = null;
+    }
 
     recognition.onstart = () => {
       console.log('Recognition started for language:', language);
@@ -64,7 +69,15 @@ const Recorder = ({ onTranscriptComplete }) => {
         }
       }
 
-      if (final) setTranscript(prev => prev + final);
+      // Only update transcript if there's actually new final text
+      if (final.trim()) {
+        setTranscript(prev => {
+          const newText = prev + final;
+          // Remove duplicate phrases
+          const words = newText.split(' ').filter(w => w);
+          return words.join(' ') + ' ';
+        });
+      }
       setInterimTranscript(interim);
     };
 
@@ -221,9 +234,13 @@ const Recorder = ({ onTranscriptComplete }) => {
             Filipino/Tagalog
           </button>
         </div>
-        <p className="language-note">
-          Note: Filipino voice recognition may have limited support on iPhone/Safari
-        </p>
+      </div>
+
+      <p className="language-note">
+        Note: Filipino voice recognition may have limited support on iPhone/Safari
+      </p>
+
+      <div className="controls">
       </div>
 
       <div className="controls">
