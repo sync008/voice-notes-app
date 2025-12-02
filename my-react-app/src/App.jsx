@@ -11,7 +11,6 @@ const useLocalNotes = () => {
       createdAt: new Date().toISOString(),
     };
     setNotes(prev => [newNote, ...prev]);
-    return newNote;
   };
 
   const deleteNote = (id) => setNotes(prev => prev.filter(n => n.id !== id));
@@ -21,22 +20,22 @@ const useLocalNotes = () => {
 };
 
 // ──────────────────────────────────────────────────────────────
-// Number normalization (English + basic Filipino)
+// Number normalization (English + Filipino)
 // ──────────────────────────────────────────────────────────────
 const normalizeNumbers = (text) => {
-  const numberMap = {
+  const map = {
     // English
     'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
     'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
-    // Filipino/Tagalog
+    // Filipino
     'isa': '1', 'dalawa': '2', 'tatlo': '3', 'apat': '4', 'lima': '5',
     'anim': '6', 'pito': '7', 'walo': '8', 'siyam': '9', 'sampu': '10',
-    'labing-isa': '11', 'labindalawa': '12' // optional extras
+    'labing isa': '11', 'labindalawa': '12', 'labintatlo': '13'
   };
 
   return text
     .toLowerCase()
-    .replace(/\b(\w+(?:-\w+)?)\b/g, word => numberMap[word] || word);
+    .replace(/\b(\w+(?:[-\s]\w+)?)\b/g, word => map[word.trim()] || word);
 };
 
 const Recorder = ({ onTranscriptComplete }) => {
@@ -45,139 +44,109 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [error, setError] = useState('');
   const [language, setLanguage] = useState('en-US');
-  const [permissionGranted, setPermissionGranted] = useState(false);
+  const [showFilipinoWarning, setShowFilipinoWarning] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
 
   const recognitionRef = useRef(null);
+  const timeoutRef = useRef(null);
   const isStoppedManually = useRef(false);
-  const startAttempts = useRef(0);
 
-  // Detect iOS early
+  // Detect iOS
   useEffect(() => {
     const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
     setIsIOS(ios);
-    if (ios && language === 'fil-PH') {
-      setLanguage('en-US');
-      setError('Filipino not supported on iOS. Switched to English.');
-    }
   }, []);
 
+  // ──────────────────────────────────────────────────────────────
+  // Chunked Recording — No Duplicates, Instant Start
+  // ──────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!isRecording) return;
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported. Use Chrome or Safari.');
+      setError('Speech recognition not supported in this browser.');
+      setIsRecording(false);
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = language;
+    const startChunk = () => {
+      if (!isRecording || isStoppedManually.current) return;
 
-    // Silence iOS beep
-    if ('audiostart' in recognition) recognition.audiostart = null;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = language;
 
-    recognition.onstart = () => {
-      console.log('Started:', language);
-      setPermissionGranted(true);
-      startAttempts.current = 0;
-    };
+      recognition.onresult = (event) => {
+        let final = '';
+        let interim = '';
 
-    recognition.onresult = (event) => {
-      let final = '';
-      let interim = '';
-
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const res = event.results[i];
-        if (res.isFinal) {
-          final += res[0].transcript;
-        } else {
-          interim += res[0].transcript;
-        }
-      }
-
-      if (final) {
-        const normalized = normalizeNumbers(final);
-        setTranscript(prev => prev + normalized + ' ');
-      }
-      setInterimTranscript(interim);
-    };
-
-    recognition.onerror = (event) => {
-      console.error('Speech error:', event.error);
-      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-        setError('Microphone access denied.');
-      } else if (event.error === 'network') {
-        setError('No internet connection.');
-      } else if (event.error === 'language-not-supported') {
-        setError('Selected language not supported on this device.');
-      }
-      // "no-speech" is normal – ignore
-      setIsRecording(false);
-    };
-
-    recognition.onend = () => {
-      if (!isStoppedManually.current) {
-        startAttempts.current++;
-        if (startAttempts.current > 15) {
-          setError('Speech recognition keeps stopping. Try again or use a different browser.');
-          setIsRecording(false);
-          return;
-        }
-        setTimeout(() => {
-          if (!isStoppedManually.current) {
-            try { recognition.start(); } catch (e) {}
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            final += res[0].transcript;
+          } else {
+            interim += res[0].transcript;
           }
-        }, 300);
-      } else {
-        setIsRecording(false);
-      }
+        }
+
+        if (final) {
+          const clean = normalizeNumbers(final.trim());
+          setTranscript(prev => prev + clean + ' ');
+        }
+        setInterimTranscript(interim);
+      };
+
+      recognition.onerror = (e) => {
+        if (e.error === 'no-speech' || e.error === 'aborted') return;
+        console.log('Recognition error:', e.error);
+      };
+
+      recognition.onend = () => {
+        if (isRecording && !isStoppedManually.current) {
+          timeoutRef.current = setTimeout(startChunk, 4200); // ~4.2s chunks
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (e) { /* already started */ }
+      recognitionRef.current = recognition;
     };
 
-    recognitionRef.current = recognition;
+    startChunk();
 
     return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (recognitionRef.current) {
-        isStoppedManually.current = true;
         recognitionRef.current.stop();
+        recognitionRef.current = null;
       }
     };
-  }, [language]);
+  }, [isRecording, language]);
 
   const startRecording = () => {
-    if (!recognitionRef.current) return;
-
     setTranscript('');
     setInterimTranscript('');
     setError('');
+    setShowFilipinoWarning(false);
     isStoppedManually.current = false;
-    startAttempts.current = 0;
-
-    setTimeout(() => {
-      try {
-        recognitionRef.current.start();
-        setIsRecording(true);
-      } catch (e) {
-        if (e.message.includes('already started')) {
-          recognitionRef.current.stop();
-          setTimeout(() => recognitionRef.current.start(), 100);
-        }
-      }
-    }, 300);
+    setIsRecording(true);
   };
 
   const stopRecording = () => {
     isStoppedManually.current = true;
-    if (recognitionRef.current) recognitionRef.current.stop();
     setIsRecording(false);
     setInterimTranscript('');
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
   };
 
   const saveNote = () => {
-    const fullText = (transcript + interimTranscript).trim();
-    if (fullText) {
-      const cleanText = normalizeNumbers(fullText);
-      onTranscriptComplete(cleanText);
+    const full = (transcript + interimTranscript).trim();
+    if (full) {
+      const clean = normalizeNumbers(full);
+      onTranscriptComplete(clean);
       setTranscript('');
       setInterimTranscript('');
     }
@@ -186,6 +155,18 @@ const Recorder = ({ onTranscriptComplete }) => {
   const discard = () => {
     setTranscript('');
     setInterimTranscript('');
+  };
+
+  const handleLanguageClick = (lang) => {
+    if (isRecording) return;
+
+    if (lang === 'fil-PH' && isIOS) {
+      setShowFilipinoWarning(true);
+      setLanguage('en-US'); // fallback to English
+    } else {
+      setShowFilipinoWarning(false);
+      setLanguage(lang);
+    }
   };
 
   const displayText = transcript + (interimTranscript ? ' ' + interimTranscript : '');
@@ -200,36 +181,31 @@ const Recorder = ({ onTranscriptComplete }) => {
         <h3 className="section-title">Language:</h3>
         <div className="language-buttons">
           <button
-            onClick={() => setLanguage('en-US')}
-            disabled={isRecording}
+            onClick={() => handleLanguageClick('en-US')}
             className={`button language-button ${language === 'en-US' ? 'active' : ''}`}
           >
             English
           </button>
           <button
-            onClick={() => setLanguage('fil-PH')}
-            disabled={isRecording || isIOS}
-            className={`button language-button ${language === 'fil-PH' ? 'active' : ''} ${isIOS ? 'disabled-ios' : ''}`}
+            onClick={() => handleLanguageClick('fil-PH')}
+            className={`button language-button ${language === 'fil-PH' ? 'active' : ''}`}
           >
             Filipino/Tagalog
           </button>
         </div>
       </div>
 
-      {/* Smart warning */}
-      {language === 'fil-PH' && (
-        <div className={`language-note ${isIOS ? 'warning-ios' : 'warning-android'}`}>
-          {isIOS ? (
-            <>
-              Filipino (Tagalog) is <strong>not supported</strong> on iPhone/Safari.<br />
-              Using <strong>English</strong> instead for best results.
-            </>
-          ) : (
-            <>
-              Filipino works best on <strong>Android Chrome</strong>.<br />
-              Results may be limited on other devices.
-            </>
-          )}
+      {/* Filipino Warning — Only shows when clicked on iOS */}
+      {showFilipinoWarning && (
+        <div className="language-note warning-ios">
+          Filipino (Tagalog) is <strong>not supported</strong> on iPhone.<br />
+          We’ve switched to <strong>English</strong> for the best experience.
+        </div>
+      )}
+
+      {!showFilipinoWarning && language === 'fil-PH' && !isIOS && (
+        <div className="language-note warning-android">
+          Filipino works best on Android Chrome.
         </div>
       )}
 
@@ -256,7 +232,7 @@ const Recorder = ({ onTranscriptComplete }) => {
           <h3>Transcript:</h3>
           <div className="transcript-box">
             {transcript}
-            {interimTranscript && <span className="interim-text"> {interimTranscript}</span>}
+            {interimTranscript && <span className="interim-text"> {interimTranscript}...</span>}
           </div>
           {!isRecording && transcript && (
             <div className="transcript-actions">
@@ -270,7 +246,6 @@ const Recorder = ({ onTranscriptComplete }) => {
   );
 };
 
-// NotesList and App remain unchanged (only tiny CSS class updates below)
 const NotesList = ({ notes, onDeleteNote, onClearAll }) => {
   const formatDate = (dateStr) => new Date(dateStr).toLocaleString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -323,7 +298,7 @@ const App = () => {
       </div>
 
       <footer className="footer">
-        <p>Best on Chrome (Android) • English works everywhere • Filipino limited on iOS</p>
+        <p>Works instantly • No duplicates • English everywhere • Filipino best on Android</p>
       </footer>
     </div>
   );
