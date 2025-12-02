@@ -26,6 +26,7 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [error, setError] = useState('');
   const [language, setLanguage] = useState('en-US');
+  const [permissionGranted, setPermissionGranted] = useState(false);
   const recognitionRef = useRef(null);
   const isStoppedManually = useRef(false);
   const startAttempts = useRef(0);
@@ -45,6 +46,9 @@ const Recorder = ({ onTranscriptComplete }) => {
     recognition.onstart = () => {
       console.log('Recognition started for language:', language);
       startAttempts.current = 0;
+      if (!permissionGranted) {
+        setPermissionGranted(true);
+      }
     };
 
     recognition.onresult = (event) => {
@@ -139,9 +143,12 @@ const Recorder = ({ onTranscriptComplete }) => {
     startAttempts.current = 0;
     
     try {
-      recognitionRef.current.start();
-      setIsRecording(true);
-      console.log('Starting recording with language:', language);
+      // Only start if we haven't initialized yet OR if permission was already granted
+      if (!permissionGranted || recognitionRef.current) {
+        recognitionRef.current.start();
+        setIsRecording(true);
+        console.log('Starting recording with language:', language);
+      }
     } catch (e) {
       console.error('Failed to start recognition:', e);
       if (e.message.includes('already started')) {
