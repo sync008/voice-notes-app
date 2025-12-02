@@ -60,23 +60,18 @@ const Recorder = ({ onTranscriptComplete }) => {
       let final = '';
       let interim = '';
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          final += result + ' ';
-        } else {
-          interim += result;
-        }
+      // Only process the latest result to avoid duplicates
+      const lastResult = event.results[event.results.length - 1];
+      
+      if (lastResult.isFinal) {
+        final = lastResult[0].transcript + ' ';
+      } else {
+        interim = lastResult[0].transcript;
       }
 
       // Only update transcript if there's actually new final text
       if (final.trim()) {
-        setTranscript(prev => {
-          const newText = prev + final;
-          // Remove duplicate phrases
-          const words = newText.split(' ').filter(w => w);
-          return words.join(' ') + ' ';
-        });
+        setTranscript(prev => prev + final);
       }
       setInterimTranscript(interim);
     };
@@ -149,35 +144,38 @@ const Recorder = ({ onTranscriptComplete }) => {
   const startRecording = () => {
     if (!recognitionRef.current) return;
 
+    // Clear everything first
     setTranscript('');
     setInterimTranscript('');
     setError('');
     isStoppedManually.current = false;
     startAttempts.current = 0;
     
-    try {
-      // Only start if we haven't initialized yet OR if permission was already granted
-      if (!permissionGranted || recognitionRef.current) {
-        recognitionRef.current.start();
-        setIsRecording(true);
-        console.log('Starting recording with language:', language);
+    // Add a small delay before starting to ensure the button is fully pressed
+    setTimeout(() => {
+      try {
+        if (!permissionGranted || recognitionRef.current) {
+          recognitionRef.current.start();
+          setIsRecording(true);
+          console.log('Starting recording with language:', language);
+        }
+      } catch (e) {
+        console.error('Failed to start recognition:', e);
+        if (e.message.includes('already started')) {
+          recognitionRef.current.stop();
+          setTimeout(() => {
+            try {
+              recognitionRef.current.start();
+              setIsRecording(true);
+            } catch (err) {
+              setError('Failed to start recording. Try again.');
+            }
+          }, 100);
+        } else {
+          setError('Failed to start recording. Try again.');
+        }
       }
-    } catch (e) {
-      console.error('Failed to start recognition:', e);
-      if (e.message.includes('already started')) {
-        recognitionRef.current.stop();
-        setTimeout(() => {
-          try {
-            recognitionRef.current.start();
-            setIsRecording(true);
-          } catch (err) {
-            setError('Failed to start recording. Try again.');
-          }
-        }, 100);
-      } else {
-        setError('Failed to start recording. Try again.');
-      }
-    }
+    }, 300);
   };
 
   const stopRecording = () => {
@@ -236,11 +234,8 @@ const Recorder = ({ onTranscriptComplete }) => {
         </div>
       </div>
 
-      <p className="language-note">
-        Note: Filipino voice recognition may have limited support on iPhone/Safari
-      </p>
-
-      <div className="controls">
+      <div className="language-note">
+        ⚠️ Note: Filipino voice recognition have limited support on Apple
       </div>
 
       <div className="controls">
