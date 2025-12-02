@@ -1,42 +1,475 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
+/* ============================================================
+   RESET & BASE STYLES
+   ============================================================ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+/* ============================================================
+   APP LAYOUT
+   ============================================================ */
+.app {
+  min-height: 100vh;
+  background-color: #f5f5f5;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+.header {
+  background-color: #4CAF50;
+  color: white;
   padding: 2rem;
   text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.app-title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: bold;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+.subtitle {
+  margin: 0.5rem 0 0 0;
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+.footer {
+  text-align: center;
+  padding: 2rem;
+  color: #757575;
+  font-size: 0.9rem;
+}
+
+.footer-note {
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+  opacity: 0.8;
+}
+
+/* ============================================================
+   RECORDER SECTION
+   ============================================================ */
+.recorder {
+  background-color: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.title {
+  margin: 0 0 1rem 0;
+  font-size: 1.5rem;
+  color: #333;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.button {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.start-button {
+  background-color: #4CAF50;
+  color: white;
+  font-size: 1.1rem;
+  padding: 1rem 2rem;
+}
+
+.start-button:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.stop-button {
+  background-color: #f44336;
+  color: white;
+  font-size: 1.1rem;
+  padding: 1rem 2rem;
+}
+
+.stop-button:hover {
+  background-color: #da190b;
+}
+
+.save-button {
+  background-color: #2196F3;
+  color: white;
+}
+
+.save-button:hover {
+  background-color: #0b7dda;
+}
+
+.discard-button {
+  background-color: #757575;
+  color: white;
+}
+
+.discard-button:hover {
+  background-color: #616161;
+}
+
+.clear-button {
+  background-color: #ff9800;
+  color: white;
+  font-size: 0.9rem;
+  padding: 0.5rem 1rem;
+}
+
+.clear-button:hover {
+  background-color: #f57c00;
+}
+
+.delete-button {
+  background-color: #f44336;
+  color: white;
+  font-size: 1.2rem;
+  padding: 0.25rem 0.5rem;
+  min-width: auto;
+}
+
+.delete-button:hover {
+  background-color: #da190b;
+}
+
+/* ============================================================
+   CONTROLS & STATUS
+   ============================================================ */
+.controls {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.error {
+  background-color: #ffebee;
+  color: #c62828;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  border: 2px solid #ef5350;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.status-section {
+  margin-bottom: 1rem;
+}
+
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background-color: #ffebee;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
+  color: #d32f2f;
+  font-weight: bold;
+  border: 2px solid #ef5350;
+}
+
+.recording-dot {
+  color: #f44336;
+  font-size: 1.5rem;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
   }
-  to {
-    transform: rotate(360deg);
+  50% {
+    opacity: 0.3;
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.status-active {
+  padding: 0.75rem;
+  background-color: #e8f5e9;
+  color: #2e7d32;
+  border-radius: 4px;
+  text-align: center;
+  font-weight: 600;
+  border: 2px solid #66bb6a;
+}
+
+.status-inactive {
+  padding: 0.75rem;
+  background-color: #fff3e0;
+  color: #e65100;
+  border-radius: 4px;
+  text-align: center;
+  font-weight: 600;
+  border: 2px solid #ffb74d;
+}
+
+.warning-box {
+  padding: 1rem;
+  background-color: #fff3e0;
+  border-radius: 4px;
+  border: 2px solid #ff9800;
+  color: #e65100;
+  font-size: 0.95rem;
+}
+
+.warning-box ul {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+/* ============================================================
+   TRANSCRIPT SECTION
+   ============================================================ */
+.transcript-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+}
+
+.section-title {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.1rem;
+  color: #555;
+}
+
+.transcript-box {
+  background-color: white;
+  padding: 1rem;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  min-height: 100px;
+  margin-bottom: 1rem;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #333;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.interim-text {
+  color: #999;
+  font-style: italic;
+}
+
+.transcript-actions {
+  display: flex;
+  gap: 1rem;
+}
+
+/* ============================================================
+   DEBUG SECTION
+   ============================================================ */
+.debug-section {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background-color: #263238;
+  border-radius: 4px;
+}
+
+.debug-box {
+  background-color: #1e1e1e;
+  color: #00ff00;
+  padding: 1rem;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.8rem;
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.4;
+}
+
+.debug-empty {
+  color: #666;
+}
+
+.debug-line {
+  margin-bottom: 0.2rem;
+}
+
+/* ============================================================
+   INFO SECTION
+   ============================================================ */
+.info {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background-color: #e3f2fd;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  color: #1565c0;
+  border: 2px solid #64b5f6;
+}
+
+.info-list {
+  margin: 0.5rem 0 0 0;
+  padding-left: 1.5rem;
+  line-height: 1.8;
+}
+
+.info-list ul {
+  margin-top: 0.5rem;
+}
+
+/* ============================================================
+   NOTES LIST SECTION
+   ============================================================ */
+.notes-list {
+  background-color: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #999;
+  font-size: 1rem;
+}
+
+.notes-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.note-card {
+  background-color: #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 1rem;
+  transition: box-shadow 0.2s;
+}
+
+.note-card:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.note-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.note-date {
+  font-size: 0.85rem;
+  color: #757575;
+  font-weight: 500;
+}
+
+.note-text {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #333;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* ============================================================
+   RESPONSIVE DESIGN
+   ============================================================ */
+@media (max-width: 768px) {
+  .container {
+    padding: 1rem;
+  }
+
+  .recorder,
+  .notes-list {
+    padding: 1rem;
+  }
+
+  .app-title {
+    font-size: 1.5rem;
+  }
+
+  .button {
+    font-size: 0.9rem;
+    padding: 0.6rem 1.2rem;
+  }
+
+  .start-button,
+  .stop-button {
+    font-size: 1rem;
+    padding: 0.8rem 1.5rem;
+  }
+
+  .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .transcript-actions {
+    flex-direction: column;
+  }
+
+  .notes-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
   }
 }
 
-.card {
-  padding: 2em;
+/* ============================================================
+   SCROLLBAR STYLING (for debug box)
+   ============================================================ */
+.debug-box::-webkit-scrollbar {
+  width: 8px;
 }
 
-.read-the-docs {
-  color: #888;
+.debug-box::-webkit-scrollbar-track {
+  background: #2e2e2e;
+  border-radius: 4px;
+}
+
+.debug-box::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.debug-box::-webkit-scrollbar-thumb:hover {
+  background: #666;
 }
