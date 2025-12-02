@@ -11,6 +11,7 @@ const useLocalNotes = () => {
       createdAt: new Date().toISOString(),
     };
     setNotes(prev => [newNote, ...prev]);
+    return newNote;
   };
 
   const deleteNote = (id) => setNotes(prev => prev.filter(n => n.id !== id));
@@ -19,147 +20,182 @@ const useLocalNotes = () => {
   return { notes, addNote, deleteNote, clearAllNotes };
 };
 
-// ──────────────────────────────────────────────────────────────
-// Smart Number Conversion (English + Filipino)
-// ──────────────────────────────────────────────────────────────
-const normalizeNumbers = (text) => {
-  const map = {
-    // English
-    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
-    // Filipino
-    'isa': '1', 'dalawa': '2', 'tatlo': '3', 'apat': '4', 'lima': '5',
-    'anim': '6', 'pito': '7', 'walo': '8', 'siyam': '9', 'sampu': '10',
-    'labing-isa': '11', 'labindalawa': '12', 'labintatlo': '13'
-  };
-
-  return text
-    .toLowerCase()
-    .replace(/\b[\w\s-]+\b/g, word => {
-      const cleaned = word.trim().toLowerCase();
-      return map[cleaned] || word;
-    });
-};
-
 const Recorder = ({ onTranscriptComplete }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [error, setError] = useState('');
   const [language, setLanguage] = useState('en-US');
-  const [showFilipinoWarning, setShowFilipinoWarning] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
-
+  const [permissionGranted, setPermissionGranted] = useState(false);
   const recognitionRef = useRef(null);
-  const timeoutRef = useRef(null);
   const isStoppedManually = useRef(false);
+  const startAttempts = useRef(0);
 
   useEffect(() => {
-    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setIsIOS(ios);
-  }, []);
-
-  // ──────────────────────────────────────────────────────────────
-  // ALWAYS LISTENING — Even in total silence, never stops
-  // ──────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isRecording) return;
-
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported in this browser.');
-      setIsRecording(false);
+      setError('Speech recognition not supported. Use Chrome or Safari.');
       return;
     }
 
-    const startChunk = () => {
-      if (isStoppedManually.current || !isRecording) return;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = language;
+    
+    // Disable sound effects on iOS/Safari
+    if (recognition.audiostart !== undefined) {
+      recognition.audiostart = null;
+    }
 
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.lang = language;
+    recognition.onstart = () => {
+      console.log('Recognition started for language:', language);
+      startAttempts.current = 0;
+      if (!permissionGranted) {
+        setPermissionGranted(true);
+      }
+    };
 
-      // These tricks force it to listen forever — even in silence
-      if ('maxSpeechTimeout' in recognition) recognition.maxSpeechTimeout = 0;
-      if ('serviceURI' in recognition) recognition.serviceURI = '';
+    recognition.onresult = (event) => {
+      let final = '';
+      let interim = '';
 
-      recognition.onresult = (event) => {
-        let final = '';
-        let interim = '';
+      // Only process the latest result to avoid duplicates
+      const lastResult = event.results[event.results.length - 1];
+      
+      if (lastResult.isFinal) {
+        final = lastResult[0].transcript + ' ';
+      } else {
+        interim = lastResult[0].transcript;
+      }
 
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          if (res.isFinal) {
-            final += res[0].transcript;
-          } else {
-            interim += res[0].transcript;
-          }
-        }
+      // Only update transcript if there's actually new final text
+      if (final.trim()) {
+        setTranscript(prev => prev + final);
+      }
+      setInterimTranscript(interim);
+    };
 
-        if (final) {
-          const clean = normalizeNumbers(final.trim());
-          setTranscript(prev => prev + clean + ' ');
-        }
-        setInterimTranscript(interim);
-      };
+    recognition.onerror = (event) => {
+      console.error('Recognition error:', event.error, 'for language:', language);
+      
+      if (event.error === 'not-allowed' || event.error === 'permission-denied') {
+        setError('Microphone access denied. Check browser permissions.');
+        setIsRecording(false);
+      } else if (event.error === 'audio-capture') {
+        setError('Cannot access microphone. Close other apps using the mic.');
+        setIsRecording(false);
+      } else if (event.error === 'network') {
+        setError('No internet connection. Speech recognition requires internet.');
+        setIsRecording(false);
+      } else if (event.error === 'language-not-supported') {
+        setError('Filipino/Tagalog may not be supported on your device. Try English.');
+        setIsRecording(false);
+      } else if (event.error === 'no-speech') {
+        // Don't stop recording on no-speech, just continue
+        console.log('No speech detected, continuing...');
+      } else {
+        console.log('Other error:', event.error);
+      }
+    };
 
-      recognition.onerror = (e) => {
-        // "no-speech" is expected during silence — ignore completely
-        if (e.error === 'no-speech' || e.error === 'aborted' || e.error === 'audio-capture') {
+    recognition.onend = () => {
+      console.log('Recognition ended. Stopped manually?', isStoppedManually.current);
+      
+      if (!isStoppedManually.current) {
+        startAttempts.current += 1;
+        
+        if (startAttempts.current > 10) {
+          setError(`Unable to start ${language === 'en-US' ? 'English' : 'Filipino'} recognition. Language may not be supported.`);
+          setIsRecording(false);
+          startAttempts.current = 0;
           return;
         }
-        console.log('Recognition error (non-blocking):', e.error);
-      };
-
-      recognition.onend = () => {
-        // ALWAYS restart — even after 10 minutes of silence
-        if (isRecording && !isStoppedManually.current) {
-          timeoutRef.current = setTimeout(startChunk, 4000); // 4-second chunks
-        }
-      };
-
-      try {
-        recognition.start();
-      } catch (e) {
-        // Ignore "already started"
+        
+        setTimeout(() => {
+          if (!isStoppedManually.current) {
+            try {
+              recognition.start();
+              console.log('Restarting recognition...');
+            } catch (e) {
+              console.error('Failed to restart:', e);
+            }
+          }
+        }, 200);
+      } else {
+        setIsRecording(false);
       }
-
-      recognitionRef.current = recognition;
     };
 
-    startChunk();
+    recognitionRef.current = recognition;
 
     return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
+        isStoppedManually.current = true;
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.error('Cleanup error:', e);
+        }
       }
     };
-  }, [isRecording, language]);
+  }, [language]);
 
   const startRecording = () => {
+    if (!recognitionRef.current) return;
+
+    // Clear everything first
     setTranscript('');
     setInterimTranscript('');
     setError('');
-    setShowFilipinoWarning(false);
     isStoppedManually.current = false;
-    setIsRecording(true);
+    startAttempts.current = 0;
+    
+    // Add a small delay before starting to ensure the button is fully pressed
+    setTimeout(() => {
+      try {
+        if (!permissionGranted || recognitionRef.current) {
+          recognitionRef.current.start();
+          setIsRecording(true);
+          console.log('Starting recording with language:', language);
+        }
+      } catch (e) {
+        console.error('Failed to start recognition:', e);
+        if (e.message.includes('already started')) {
+          recognitionRef.current.stop();
+          setTimeout(() => {
+            try {
+              recognitionRef.current.start();
+              setIsRecording(true);
+            } catch (err) {
+              setError('Failed to start recording. Try again.');
+            }
+          }, 100);
+        } else {
+          setError('Failed to start recording. Try again.');
+        }
+      }
+    }, 300);
   };
 
   const stopRecording = () => {
+    console.log('Stopping recording manually');
     isStoppedManually.current = true;
+    startAttempts.current = 0;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.error('Stop error:', e);
+      }
+    }
     setIsRecording(false);
     setInterimTranscript('');
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
   };
 
   const saveNote = () => {
-    const full = (transcript + interimTranscript).trim();
-    if (full) {
-      const clean = normalizeNumbers(full);
-      onTranscriptComplete(clean);
+    if (transcript.trim()) {
+      onTranscriptComplete(transcript.trim());
       setTranscript('');
       setInterimTranscript('');
     }
@@ -168,18 +204,6 @@ const Recorder = ({ onTranscriptComplete }) => {
   const discard = () => {
     setTranscript('');
     setInterimTranscript('');
-  };
-
-  const handleLanguageClick = (lang) => {
-    if (isRecording) return;
-
-    if (lang === 'fil-PH' && isIOS) {
-      setShowFilipinoWarning(true);
-      setLanguage('en-US');
-    } else {
-      setShowFilipinoWarning(false);
-      setLanguage(lang);
-    }
   };
 
   const displayText = transcript + (interimTranscript ? ' ' + interimTranscript : '');
@@ -194,32 +218,25 @@ const Recorder = ({ onTranscriptComplete }) => {
         <h3 className="section-title">Language:</h3>
         <div className="language-buttons">
           <button
-            onClick={() => handleLanguageClick('en-US')}
-            className={`button language-button ${language === 'en-US' ? 'active' : ''}`}
+            onClick={() => setLanguage('en-US')}
+            disabled={isRecording}
+            className={`button language-button ${language === 'en-US' ? 'language-button-active' : 'language-button-inactive'}`}
           >
             English
           </button>
           <button
-            onClick={() => handleLanguageClick('fil-PH')}
-            className={`button language-button ${language === 'fil-PH' ? 'active' : ''}`}
+            onClick={() => setLanguage('fil-PH')}
+            disabled={isRecording}
+            className={`button language-button ${language === 'fil-PH' ? 'language-button-active' : 'language-button-inactive'}`}
           >
             Filipino/Tagalog
           </button>
         </div>
       </div>
 
-      {showFilipinoWarning && (
-        <div className="language-note warning-ios">
-          Filipino (Tagalog) is <strong>not supported</strong> on iPhone.<br />
-          Using <strong>English</strong> for reliable transcription.
-        </div>
-      )}
-
-      {!showFilipinoWarning && language === 'fil-PH' && !isIOS && (
-        <div className="language-note warning-android">
-          Filipino works best on Android Chrome.
-        </div>
-      )}
+      <div className="language-note">
+        ⚠️ Note: Filipino voice recognition may have limited support on iPhone/Safari
+      </div>
 
       <div className="controls">
         {!isRecording ? (
@@ -235,7 +252,7 @@ const Recorder = ({ onTranscriptComplete }) => {
 
       {isRecording && (
         <div className="recording-indicator">
-          <span className="recording-dot">●</span> LISTENING ({language === 'en-US' ? 'English' : 'Filipino'})
+          <span className="recording-dot">●</span> RECORDING ({language === 'en-US' ? 'English' : 'Filipino'})
         </div>
       )}
 
@@ -244,7 +261,7 @@ const Recorder = ({ onTranscriptComplete }) => {
           <h3>Transcript:</h3>
           <div className="transcript-box">
             {transcript}
-            {interimTranscript && <span className="interim-text"> {interimTranscript}...</span>}
+            {interimTranscript && <span className="interim-text"> {interimTranscript}</span>}
           </div>
           {!isRecording && transcript && (
             <div className="transcript-actions">
@@ -301,7 +318,7 @@ const App = () => {
     <div className="app">
       <header className="header">
         <h1 className="app-title">Voice Notes</h1>
-        <p className="subtitle">Always listening • No duplicates • Works everywhere</p>
+        <p className="subtitle">Speak → Save → Done</p>
       </header>
 
       <div className="container">
@@ -310,7 +327,7 @@ const App = () => {
       </div>
 
       <footer className="footer">
-        <p>Always listening • English: iPhone + Android • Filipino: Android only</p>
+        <p>Works best on Chrome (Android/Desktop) • Limited language support on iPhone/Safari</p>
       </footer>
     </div>
   );
