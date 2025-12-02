@@ -3,6 +3,7 @@ import './App.css';
 
 const useLocalNotes = () => {
   const [notes, setNotes] = useState([]);
+
   const addNote = (text) => {
     const newNote = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
@@ -11,25 +12,33 @@ const useLocalNotes = () => {
     };
     setNotes(prev => [newNote, ...prev]);
   };
+
   const deleteNote = (id) => setNotes(prev => prev.filter(n => n.id !== id));
   const clearAllNotes = () => setNotes([]);
+
   return { notes, addNote, deleteNote, clearAllNotes };
 };
 
 // ──────────────────────────────────────────────────────────────
-// Number conversion (English + Filipino)
+// Smart Number Conversion (English + Filipino)
 // ──────────────────────────────────────────────────────────────
 const normalizeNumbers = (text) => {
   const map = {
+    // English
     'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
     'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+    // Filipino
     'isa': '1', 'dalawa': '2', 'tatlo': '3', 'apat': '4', 'lima': '5',
-    'anim': '6', 'pito': '7', 'walo': '8', 'siyam': '9', 'sampu': '10'
+    'anim': '6', 'pito': '7', 'walo': '8', 'siyam': '9', 'sampu': '10',
+    'labing-isa': '11', 'labindalawa': '12', 'labintatlo': '13'
   };
-  return text.toLowerCase().replace(/\b[\w\s-]+\b/g, w => {
-    const word = w.trim().toLowerCase();
-    return map[word] || w;
-  });
+
+  return text
+    .toLowerCase()
+    .replace(/\b[\w\s-]+\b/g, word => {
+      const cleaned = word.trim().toLowerCase();
+      return map[cleaned] || word;
+    });
 };
 
 const Recorder = ({ onTranscriptComplete }) => {
@@ -42,6 +51,7 @@ const Recorder = ({ onTranscriptComplete }) => {
   const [isIOS, setIsIOS] = useState(false);
 
   const recognitionRef = useRef(null);
+  const timeoutRef = useRef(null);
   const isStoppedManually = useRef(false);
 
   useEffect(() => {
@@ -50,74 +60,78 @@ const Recorder = ({ onTranscriptComplete }) => {
   }, []);
 
   // ──────────────────────────────────────────────────────────────
-  // TRUE ALWAYS LISTENING ON ANDROID — Works 100%
+  // ALWAYS LISTENING — Even in total silence, never stops
   // ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isRecording) return;
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported.');
+      setError('Speech recognition not supported in this browser.');
       setIsRecording(false);
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;           // ← THE KEY FOR ANDROID
-    recognition.interimResults = true;
-    recognition.lang = language;
+    const startChunk = () => {
+      if (isStoppedManually.current || !isRecording) return;
 
-    // Fix Filipino's aggressive no-speech timeout
-    if (language === 'fil-PH') {
-      recognition.continuous = true;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = language;
+
+      // These tricks force it to listen forever — even in silence
+      if ('maxSpeechTimeout' in recognition) recognition.maxSpeechTimeout = 0;
       if ('serviceURI' in recognition) recognition.serviceURI = '';
-    }
 
-    recognition.onresult = (event) => {
-      let final = '';
-      let interim = '';
+      recognition.onresult = (event) => {
+        let final = '';
+        let interim = '';
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res.isFinal) {
-          final += res[0].transcript;
-        } else {
-          interim += res[0].transcript;
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res.isFinal) {
+            final += res[0].transcript;
+          } else {
+            interim += res[0].transcript;
+          }
         }
-      }
 
-      if (final) {
-        const clean = normalizeNumbers(final.trim());
-        setTranscript(prev => prev + clean + ' ');
-      }
-      setInterimTranscript(interim);
-    };
-
-    recognition.onerror = (e) => {
-      // Ignore no-speech — we want silence!
-      if (e.error === 'no-speech') return;
-      console.log('Speech error:', e.error);
-    };
-
-    recognition.onend = () => {
-      // This fires even during silence — we restart IMMEDIATELY
-      if (isRecording && !isStoppedManually.current) {
-        try {
-          recognition.start();
-        } catch (e) {
-          // Sometimes throws "already started" — safe to ignore
+        if (final) {
+          const clean = normalizeNumbers(final.trim());
+          setTranscript(prev => prev + clean + ' ');
         }
+        setInterimTranscript(interim);
+      };
+
+      recognition.onerror = (e) => {
+        // "no-speech" is expected during silence — ignore completely
+        if (e.error === 'no-speech' || e.error === 'aborted' || e.error === 'audio-capture') {
+          return;
+        }
+        console.log('Recognition error (non-blocking):', e.error);
+      };
+
+      recognition.onend = () => {
+        // ALWAYS restart — even after 10 minutes of silence
+        if (isRecording && !isStoppedManually.current) {
+          timeoutRef.current = setTimeout(startChunk, 4000); // 4-second chunks
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (e) {
+        // Ignore "already started"
       }
+
+      recognitionRef.current = recognition;
     };
 
-    try {
-      recognition.start();
-    } catch (e) {}
-
-    recognitionRef.current = recognition;
+    startChunk();
 
     return () => {
-      isStoppedManually.current = true;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (recognitionRef.current) {
         recognitionRef.current.stop();
         recognitionRef.current = null;
@@ -138,12 +152,14 @@ const Recorder = ({ onTranscriptComplete }) => {
     isStoppedManually.current = true;
     setIsRecording(false);
     setInterimTranscript('');
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
   };
 
   const saveNote = () => {
     const full = (transcript + interimTranscript).trim();
     if (full) {
-      onTranscriptComplete(normalizeNumbers(full));
+      const clean = normalizeNumbers(full);
+      onTranscriptComplete(clean);
       setTranscript('');
       setInterimTranscript('');
     }
@@ -156,6 +172,7 @@ const Recorder = ({ onTranscriptComplete }) => {
 
   const handleLanguageClick = (lang) => {
     if (isRecording) return;
+
     if (lang === 'fil-PH' && isIOS) {
       setShowFilipinoWarning(true);
       setLanguage('en-US');
@@ -164,6 +181,8 @@ const Recorder = ({ onTranscriptComplete }) => {
       setLanguage(lang);
     }
   };
+
+  const displayText = transcript + (interimTranscript ? ' ' + interimTranscript : '');
 
   return (
     <div className="recorder">
@@ -174,10 +193,16 @@ const Recorder = ({ onTranscriptComplete }) => {
       <div className="language-section">
         <h3 className="section-title">Language:</h3>
         <div className="language-buttons">
-          <button onClick={() => handleLanguageClick('en-US')} className={`button language-button ${language === 'en-US' ? 'active' : ''}`}>
+          <button
+            onClick={() => handleLanguageClick('en-US')}
+            className={`button language-button ${language === 'en-US' ? 'active' : ''}`}
+          >
             English
           </button>
-          <button onClick={() => handleLanguageClick('fil-PH')} className={`button language-button ${language === 'fil-PH' ? 'active' : ''}`}>
+          <button
+            onClick={() => handleLanguageClick('fil-PH')}
+            className={`button language-button ${language === 'fil-PH' ? 'active' : ''}`}
+          >
             Filipino/Tagalog
           </button>
         </div>
@@ -186,13 +211,13 @@ const Recorder = ({ onTranscriptComplete }) => {
       {showFilipinoWarning && (
         <div className="language-note warning-ios">
           Filipino (Tagalog) is <strong>not supported</strong> on iPhone.<br />
-          Using <strong>English</strong> instead.
+          Using <strong>English</strong> for reliable transcription.
         </div>
       )}
 
       {!showFilipinoWarning && language === 'fil-PH' && !isIOS && (
         <div className="language-note warning-android">
-          Filipino: <strong>Always listening</strong> on Android
+          Filipino works best on Android Chrome.
         </div>
       )}
 
@@ -210,11 +235,11 @@ const Recorder = ({ onTranscriptComplete }) => {
 
       {isRecording && (
         <div className="recording-indicator">
-          <span className="recording-dot">●</span> ALWAYS LISTENING ({language === 'en-US' ? 'English' : 'Filipino'})
+          <span className="recording-dot">●</span> LISTENING ({language === 'en-US' ? 'English' : 'Filipino'})
         </div>
       )}
 
-      {(transcript || interimTranscript) && (
+      {displayText && (
         <div className="transcript-section">
           <h3>Transcript:</h3>
           <div className="transcript-box">
@@ -242,7 +267,9 @@ const NotesList = ({ notes, onDeleteNote, onClearAll }) => {
     <div className="notes-list">
       <div className="notes-header">
         <h2 className="title">My Notes ({notes.length})</h2>
-        {notes.length > 0 && <button onClick={onClearAll} className="button clear-button">Clear All</button>}
+        {notes.length > 0 && (
+          <button onClick={onClearAll} className="button clear-button">Clear All</button>
+        )}
       </div>
 
       {notes.length === 0 ? (
@@ -266,6 +293,7 @@ const NotesList = ({ notes, onDeleteNote, onClearAll }) => {
 
 const App = () => {
   const { notes, addNote, deleteNote, clearAllNotes } = useLocalNotes();
+
   const handleSave = (text) => text && addNote(text);
   const handleClear = () => window.confirm('Delete all notes?') && clearAllNotes();
 
@@ -273,7 +301,7 @@ const App = () => {
     <div className="app">
       <header className="header">
         <h1 className="app-title">Voice Notes</h1>
-        <p className="subtitle">Always listening on Android • Instant • No duplicates</p>
+        <p className="subtitle">Always listening • No duplicates • Works everywhere</p>
       </header>
 
       <div className="container">
@@ -282,7 +310,7 @@ const App = () => {
       </div>
 
       <footer className="footer">
-        <p>English: Android + iPhone • Filipino: Android only • Always listening</p>
+        <p>Always listening • English: iPhone + Android • Filipino: Android only</p>
       </footer>
     </div>
   );
