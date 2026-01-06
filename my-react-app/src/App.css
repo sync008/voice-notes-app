@@ -125,7 +125,7 @@ body {
   background-color: #f44336;
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: 7px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
