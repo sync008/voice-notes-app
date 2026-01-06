@@ -53,12 +53,46 @@
   font-weight: 500;
 }
 
+.note-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.note-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #2c3e50;
+  margin: 0 0 0.8rem 0;
+  line-height: 1.4;
+}
+
 .note-text {
   font-size: 1.05rem;
   line-height: 1.7;
   color: #2c3e50;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.edit-icon-button {
+  background-color: #2196F3;
+  color: white;
+  font-size: 1.2rem;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.edit-icon-button:hover {
+  background-color: #1976d2;
+  transform: scale(1.1);
 }
 
 .delete-button {
@@ -78,6 +112,80 @@
 
 .delete-button:hover {
   background-color: #d32f2f;
+  transform: scale(1.1);
+}
+
+/* Edit Form */
+.note-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.edit-title-input,
+.edit-text-input {
+  padding: 0.9rem;
+  font-size: 1rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.edit-title-input {
+  font-weight: 600;
+}
+
+.edit-title-input:focus,
+.edit-text-input:focus {
+  outline: none;
+  border-color: #2196F3;
+  box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+}
+
+.edit-text-input {
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.6;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.save-edit-button {
+  background-color: #4CAF50;
+  color: white;
+  padding: 0.7rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex: 1;
+}
+
+.save-edit-button:hover {
+  background-color: #45a049;
+}
+
+.cancel-edit-button {
+  background-color: #757575;
+  color: white;
+  padding: 0.7rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex: 1;
+}
+
+.cancel-edit-button:hover {
+  background-color: #616161;
 }
 
 /* Responsive */
@@ -89,5 +197,9 @@
   .notes-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .edit-actions {
+    flex-direction: column;
   }
 }

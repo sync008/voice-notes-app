@@ -143,6 +143,11 @@
   word-wrap: break-word;
 }
 
+.transcript-box.live {
+  border-color: #4CAF50;
+  background-color: #f1f8f4;
+}
+
 .interim-text {
   color: #999;
   font-style: italic;
