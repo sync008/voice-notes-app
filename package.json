@@ -1,0 +1,19 @@
+{
+  "name": "voice-notes-app",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "install-backend": "cd backend && npm install",
+    "install-frontend": "cd my-react-app && npm install",
+    "install-all": "npm run install-backend && npm run install-frontend",
+    "build": "cd my-react-app && npm run build",
+    "start": "cd backend && node server.js",
+    "dev-backend": "cd backend && npm run dev",
+    "dev-frontend": "cd my-react-app && npm run dev",
+    "dev": "concurrently \"npm run dev-backend\" \"npm run dev-frontend\""
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -5,6 +5,7 @@ import Recorder from './components/Recorder/Recorder';
 import ManualNote from './components/ManualNote/ManualNote';
 import NotesList from './components/NotesList/NotesList';
 import Login from './components/Login/Login';
+import { API_BASE_URL } from './config';
 import './App.css';
 
 const App = () => {
@@ -27,7 +28,7 @@ const App = () => {
   // Fetch notes from server
   const fetchNotes = async (userId) => {
     try {
-      const response = await fetch(`http://localhost:5000/notes/${userId}`);
+      const response = await fetch(`${API_BASE_URL}/notes/${userId}`);
       const data = await response.json();
       
       if (data.success) {
@@ -56,7 +57,7 @@ const App = () => {
   // Add note from voice recording (no title)
   const addNoteFromRecording = async (text) => {
     try {
-      const response = await fetch('http://localhost:5000/notes', {
+      const response = await fetch(`${API_BASE_URL}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -82,7 +83,7 @@ const App = () => {
   // Add note manually (with optional title)
   const addNoteManually = async (title, text) => {
     try {
-      const response = await fetch('http://localhost:5000/notes', {
+      const response = await fetch(`${API_BASE_URL}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -108,7 +109,7 @@ const App = () => {
   // Edit note
   const editNote = async (noteId, title, text) => {
     try {
-      const response = await fetch(`http://localhost:5000/notes/${noteId}`, {
+      const response = await fetch(`${API_BASE_URL}/notes/${noteId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json'
@@ -135,7 +136,7 @@ const App = () => {
   // Delete note
   const deleteNote = async (noteId) => {
     try {
-      const response = await fetch(`http://localhost:5000/notes/${noteId}`, {
+      const response = await fetch(`${API_BASE_URL}/notes/${noteId}`, {
         method: 'DELETE'
       });
 
@@ -157,7 +158,7 @@ const App = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/notes/user/${user.id}`, {
+      const response = await fetch(`${API_BASE_URL}/notes/user/${user.id}`, {
         method: 'DELETE'
       });
 
