@@ -20,14 +20,28 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// API Routes
+// API Routes (must come BEFORE static file serving)
 app.use('/auth', authRouter);
 app.use('/notes', notesRouter);
 
 // Serve static files from React app in production
 if (process.env.NODE_ENV === 'production') {
   const frontendPath = path.join(__dirname, '../my-react-app/dist');
-  app.use(express.static(frontendPath));
+  
+  // Serve static files with proper MIME types
+  app.use(express.static(frontendPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.css')) {
+        res.setHeader('Content-Type', 'text/css');
+      } else if (filePath.endsWith('.js')) {
+        res.setHeader('Content-Type', 'application/javascript');
+      } else if (filePath.endsWith('.json')) {
+        res.setHeader('Content-Type', 'application/json');
+      } else if (filePath.endsWith('.svg')) {
+        res.setHeader('Content-Type', 'image/svg+xml');
+      }
+    }
+  }));
   
   // Handle React routing, return all requests to React app
   app.get('*', (req, res) => {
