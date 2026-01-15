@@ -12,6 +12,29 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
+
+  // Check for dark mode preference on mount
+  useEffect(() => {
+    const savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode === 'true') {
+      setDarkMode(true);
+      document.body.classList.add('dark-mode');
+    }
+  }, []);
+
+  // Toggle dark mode
+  const toggleDarkMode = () => {
+    const newDarkMode = !darkMode;
+    setDarkMode(newDarkMode);
+    localStorage.setItem('darkMode', newDarkMode.toString());
+    
+    if (newDarkMode) {
+      document.body.classList.add('dark-mode');
+    } else {
+      document.body.classList.remove('dark-mode');
+    }
+  };
 
   // Check if user is logged in on mount
   useEffect(() => {
@@ -178,12 +201,12 @@ const App = () => {
   }
 
   if (!user) {
-    return <Login onLoginSuccess={handleLogin} />;
+    return <Login onLoginSuccess={handleLogin} darkMode={darkMode} toggleDarkMode={toggleDarkMode} />;
   }
 
   return (
     <div className="app">
-      <Header />
+      <Header darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
       <div className="user-bar">
         <span className="welcome-text">Welcome, {user.username}!</span>
         <button onClick={handleLogout} className="logout-button">

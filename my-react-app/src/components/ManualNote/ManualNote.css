@@ -4,6 +4,12 @@
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   margin-bottom: 2rem;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+body.dark-mode .manual-note {
+  background-color: #2a2a2a;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 .expand-button {
@@ -36,6 +42,11 @@
   font-size: 1.4rem;
   color: #2c3e50;
   font-weight: 600;
+  transition: color 0.3s ease;
+}
+
+body.dark-mode .form-title {
+  color: #e0e0e0;
 }
 
 .form-group {
@@ -51,6 +62,15 @@
   border-radius: 8px;
   font-family: inherit;
   transition: all 0.2s ease;
+  background-color: white;
+  color: #333;
+}
+
+body.dark-mode .title-input,
+body.dark-mode .text-input {
+  background-color: #3a3a3a;
+  border-color: #4a4a4a;
+  color: #e0e0e0;
 }
 
 .title-input {
@@ -62,6 +82,12 @@
   outline: none;
   border-color: #2196F3;
   box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+}
+
+body.dark-mode .title-input:focus,
+body.dark-mode .text-input:focus {
+  border-color: #42a5f5;
+  box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.2);
 }
 
 .text-input {

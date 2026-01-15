@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { API_BASE_URL } from '../../config';
 import './Login.css';
 
-const Login = ({ onLoginSuccess }) => {
+const Login = ({ onLoginSuccess, darkMode, toggleDarkMode }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [formData, setFormData] = useState({
     username: '',
@@ -73,6 +73,9 @@ const Login = ({ onLoginSuccess }) => {
 
   return (
     <div className="login-container">
+      <button onClick={toggleDarkMode} className="theme-toggle-login" aria-label="Toggle dark mode">
+        {darkMode ? '☀️' : '🌙'}
+      </button>
       <div className="login-box">
         <h1 className="login-title">Voice Notes</h1>
         <h2 className="login-subtitle">
